@@ -908,9 +908,12 @@ static ssize_t set_forced_headset_type(struct device *dev,
                    struct device_attribute *attr,
                    const char *buf, size_t count)
 {
-
+    int input_val; //0, 1, 2
+    sscanf(buf, "%d", &input_val);
+    
     es9218p_sabre_hifi2lpb();
     g_volume = 0;
+<<<<<<< HEAD
    // forced_headset_type = input_val + 1;
 
     if (!strncmp(buf, "normal", strlen("normal"))) {
@@ -920,6 +923,10 @@ static ssize_t set_forced_headset_type(struct device *dev,
     } else if (!strncmp(buf, "aux", strlen("aux"))) {
         g_headset_type = 3;
     }
+=======
+    
+    g_headset_type = input_val + 1;
+>>>>>>> de8ec6aba890... techpack: audio: es9218p: change headset_type sysfs behaviour to ints
 
     es9218p_sabre_bypass2hifi();
 
