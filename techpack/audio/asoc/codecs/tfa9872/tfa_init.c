@@ -101,7 +101,6 @@ static enum tfa98xx_error tfa9896_specific(tfa98xx_handle_t handle)
 			return TFA98XX_ERROR_NOT_OPEN;
 
 	/* all i2C registers must already set to default POR value */
-
 	/* $48:[3] - 1 ==> 0; iddqtestbst - default value changed.
 	 * When Iddqtestbst is set to "0", the slewrate is reduced.
 	 * This will lower the overshoot on IN-B to avoid NMOS damage of booster.
