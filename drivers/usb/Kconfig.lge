@@ -15,7 +15,6 @@ config LGE_USB_GADGET
 	select LGE_USB_DIAG_LOCK_SPR if LGE_ONE_BINARY_SKU
 	select LGE_USB_DIAG_LOCK_TRF if LGE_ONE_BINARY_SKU
 	select LGE_USB_DIAG_LOCK_VZW if LGE_ONE_BINARY_SKU
-	select LGE_USB_GADGET_AUTORUN_VZW if LGE_ONE_BINARY_SKU
 	help
 	  Customized Android Gadget USB framework for
 	  LGE United PC host USB driver.
@@ -37,6 +36,8 @@ config LGE_USB_GADGET_AUTORUN
 
 config LGE_USB_GADGET_AUTORUN_VZW
 	boolean "VZW specific autorun support in LGE Android"
+	depends on LGE_USB_GADGET
+	default y if LGE_ONE_BINARY_SKU
 	select LGE_USB_GADGET_AUTORUN
 	help
 	  It supports VZW specific autorun feature. note that this
