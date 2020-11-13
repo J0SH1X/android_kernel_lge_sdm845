@@ -71,12 +71,9 @@ void tfa9895_ops(struct tfa_device_ops *ops);
 
 #if defined(TFADSP_DSP_MSG_APR_PACKET_STRATEGY)
 // in case of CONFIG_MSM_QDSP6_APRV2_GLINK/APRV3_GLINK, with smaller APR_MAX_BUF (512)
-// in other cases, with safe size (4096)
 #define APR_RESIDUAL_SIZE	60
-#define APR_MAX_BUF2 ((APR_MAX_BUF > 512) ? 4096 : APR_MAX_BUF)
-#define MAX_APR_MSG_SIZE	(APR_MAX_BUF2-APR_RESIDUAL_SIZE) // 452 or 4036
-// data size in packet by excluding header (packet_id:2, packet_size:2)
-// #define STANDARD_PACKET_SIZE	(MAX_APR_MSG_SIZE - 4) // 448 or 4032
+#define MAX_APR_MSG_SIZE	(APR_MAX_BUF-APR_RESIDUAL_SIZE) // 452
+// #define STANDARD_PACKET_SIZE	(MAX_APR_MSG_SIZE-4) // 448 (packet_id:2, packet_size:2)
 #endif
 
 // retry values
@@ -86,6 +83,7 @@ void tfa9895_ops(struct tfa_device_ops *ops);
 #define MTPBWAIT_TRIES	50
 #define MTPEX_WAIT_NTRIES	25
 
+// #define REDUCED_REGISTER_SETTING
 #define WRITE_CALIBRATION_DATA_TO_MTP
 #define CHECK_CALIBRATION_DATA_RANGE
 #if defined(WRITE_CALIBRATION_DATA_TO_MTP)
@@ -114,8 +112,8 @@ static enum tfa_error _tfa_stop(tfa98xx_handle_t handle);
 #if defined(TFA_USE_DEVICE_SPECIFIC_CONTROL)
 static int active_handle = -1;
 #endif
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
-static int first_after_boot[MAX_HANDLES];
+#if defined(REDUCED_REGISTER_SETTING)
+static int first_after_boot[MAX_HANDLES] = {1};
 #endif
 
 /*
@@ -427,11 +425,6 @@ static void tfa_set_query_info(int dev_idx)
 	handles_local[dev_idx].is_bypass = 0;
 	handles_local[dev_idx].saam_use_case = 0; /* not in use */
 	handles_local[dev_idx].stream_state = 0; /* not in use */
-	handles_local[dev_idx].individual_msg = 0;
-
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
-	first_after_boot[dev_idx] = 1;
-#endif
 
 	/* TODO use the getfeatures() for retrieving the features [artf103523]
 	 * handles_local[dev_idx].support_drc = SUPPORT_NOT_SET;
@@ -1005,7 +998,7 @@ enum tfa98xx_error tfa98xx_set_saam_use_case(int samstream)
 enum tfa98xx_error tfa98xx_set_stream_state(int stream_state)
 {
 	int dev, devcount = tfa98xx_cnt_max_device();
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
+#if defined(REDUCED_REGISTER_SETTING)
 	static int prev_samstream[MAX_HANDLES] = {-1};
 	int cur_samstream = (stream_state & BIT_SAMSTREAM) ? 1 : 0;
 #endif
@@ -1019,9 +1012,9 @@ enum tfa98xx_error tfa98xx_set_stream_state(int stream_state)
 
 	for (dev = 0; dev < devcount; dev++) {
 		handles_local[dev].stream_state = stream_state;
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
+#if defined(REDUCED_REGISTER_SETTING)
 		if (prev_samstream[dev] != cur_samstream) {
-			pr_info("%s: samstream toggled: %d -> %d\n",
+			pr_debug("%s: samstream toggled: %d -> %d\n",
 				__func__, prev_samstream[dev], cur_samstream);
 			first_after_boot[dev] = 1; /* reload reg at toggling SAMSTREAM */
 			prev_samstream[dev] = cur_samstream;
@@ -1098,7 +1091,7 @@ enum tfa98xx_error tfa98xx_dsp_reset(tfa98xx_handle_t dev_idx, int state)
  * This is the clean, default static
  */
 static enum tfa98xx_error _tfa98xx_dsp_system_stable(tfa98xx_handle_t handle,
-	int *ready)
+						int *ready)
 {
 	enum tfa98xx_error error = TFA98XX_ERROR_OK;
 	unsigned short status;
@@ -2942,14 +2935,9 @@ enum tfa98xx_error tfa_dsp_cmd_id_write(tfa98xx_handle_t handle,
 #if defined(TFADSP_DSP_BUFFER_POOL)
 	int buffer_p_index = -1;
 #endif
-	int handle_in_use = 0;
 
-	handle_in_use = tfa98xx_handle_is_open(handle);
-	if (!handle_in_use) {
-		pr_info("%s: open handle [%d] by force, when not in use\n",
-			__func__, handle);
-		tfa98xx_open(handle);
-	}
+	if (!tfa98xx_handle_is_open(handle))
+		return TFA98XX_ERROR_NOT_OPEN;
 
 #if defined(TFADSP_DSP_BUFFER_POOL)
 	buffer_p_index = tfa98xx_buffer_pool_access
@@ -2989,23 +2977,10 @@ enum tfa98xx_error tfa_dsp_cmd_id_write(tfa98xx_handle_t handle,
 	kfree(buffer);
 #endif // TFADSP_DSP_BUFFER_POOL
 
-	if (!handle_in_use) {
-		pr_info("%s: close handle [%d] when it's open by force\n",
-			__func__, handle);
-		tfa98xx_close(handle);
-	}
-
 	return error;
 
 dsp_cmd_id_write_error_exit:
 	pr_err("%s: can not allocate memory\n", __func__);
-
-	if (!handle_in_use) {
-		pr_info("%s: close handle [%d] when it's open by force\n",
-			__func__, handle);
-		tfa98xx_close(handle);
-	}
-
 	return TFA98XX_ERROR_FAIL;
 }
 
@@ -3018,14 +2993,9 @@ enum tfa98xx_error tfa_dsp_cmd_id_write_read(tfa98xx_handle_t handle,
 {
 	enum tfa98xx_error error;
 	unsigned char buffer[3];
-	int handle_in_use = 0;
 
-	handle_in_use = tfa98xx_handle_is_open(handle);
-	if (!handle_in_use) {
-		pr_info("%s: open handle [%d] by force, when not in use\n",
-			__func__, handle);
-		tfa98xx_open(handle);
-	}
+	if (!tfa98xx_handle_is_open(handle))
+		return TFA98XX_ERROR_NOT_OPEN;
 
 	buffer[0] = handles_local[handle].spkr_select;
 	buffer[1] = module_id + 128;
@@ -3048,15 +3018,11 @@ enum tfa98xx_error tfa_dsp_cmd_id_write_read(tfa98xx_handle_t handle,
 	pr_debug("%s: dsp_msg[]=0x%x, 0x%x, 0x%x\n",
 		__func__, buffer[0], buffer[1], buffer[2]);
 	error = dsp_msg(handle, sizeof(unsigned char[3]), (char *)buffer);
-	if (error == TFA98XX_ERROR_OK)
-		/* read the data from the dsp */
-		error = dsp_msg_read(handle, num_bytes, data);
+	if (error != TFA98XX_ERROR_OK)
+		return error;
 
-	if (!handle_in_use) {
-		pr_info("%s: close handle [%d] when it's open by force\n",
-			__func__, handle);
-		tfa98xx_close(handle);
-	}
+	/* read the data from the dsp */
+	error = dsp_msg_read(handle, num_bytes, data);
 
 	return error;
 }
@@ -4127,18 +4093,15 @@ enum tfa98xx_error tfa_run_startup(tfa98xx_handle_t handle, int profile)
 	enum tfa98xx_error err = TFA98XX_ERROR_OK;
 	struct tfa_device_list *dev = tfa_cont_device(handle);
 	int i, noinit = 0;
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
+#if defined(REDUCED_REGISTER_SETTING)
 	int is_cold_amp;
 #endif
 
 	if (dev == NULL)
 		return TFA98XX_ERROR_FAIL;
 
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
+#if defined(REDUCED_REGISTER_SETTING)
 	is_cold_amp = tfa_is_cold_amp(handle);
-	pr_info("%s: [%d] flag to write registers (%d:%d) - prof (%d:%d)\n",
-		__func__, handle, first_after_boot[handle], is_cold_amp,
-		profile, tfa_get_swprof(handle));
 	if (first_after_boot[handle] || is_cold_amp == 1) {
 #endif
 
@@ -4163,29 +4126,17 @@ enum tfa98xx_error tfa_run_startup(tfa98xx_handle_t handle, int profile)
 		 * this will run the list
 		 * until a non-register item is encountered
 		 */
-		/* write device register settings from dev */
 		err = tfa_cont_write_regs_dev(handle);
-		if (err != TFA98XX_ERROR_OK) { /* retry if error happens */
-			pr_info("%s: [%d] retry to write registers under dev\n",
-				__func__, handle);
-			err = tfa_cont_write_regs_dev(handle);
-		}
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
-		if (err != TFA98XX_ERROR_OK) { /* reset flag to do next time */
-			pr_info("%s: [%d] reset flag for registers under dev\n",
-				__func__, handle);
-			first_after_boot[handle] = 1;
-		}
-#endif
+		/* write device register settings */
 		PRINT_ASSERT(err);
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
+#if defined(REDUCED_REGISTER_SETTING)
 	} else {
 		pr_info("%s: skip_init and writing registers under dev (%d:%d)\n",
 			__func__, first_after_boot[handle], is_cold_amp);
 	}
 #endif
 
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
+#if defined(REDUCED_REGISTER_SETTING)
 	if ((first_after_boot[handle] || (is_cold_amp == 1))
 		|| (profile != tfa_get_swprof(handle))) {
 #endif
@@ -4193,22 +4144,9 @@ enum tfa98xx_error tfa_run_startup(tfa98xx_handle_t handle, int profile)
 		 * NOTE we may still have ACS=1
 		 * so we can switch sample rate here
 		 */
-		/* write device register settings from prof */
 		err =  tfa_cont_write_regs_prof(handle, profile);
-		if (err != TFA98XX_ERROR_OK) { /* retry if error happens */
-			pr_debug("%s: [%d] retry to write registers under profile\n",
-				__func__, handle);
-			err = tfa_cont_write_regs_prof(handle, profile);
-		}
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
-		if (err != TFA98XX_ERROR_OK) { /* reset flag to do next time */
-			pr_info("%s: [%d] reset flag for registers under profile\n",
-				__func__, handle);
-			first_after_boot[handle] = 1;
-		}
-#endif
 		PRINT_ASSERT(err);
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
+#if defined(REDUCED_REGISTER_SETTING)
 	} else {
 		pr_info("%s: skip writing registers under profile (%d)\n",
 			__func__, profile);
@@ -4230,7 +4168,7 @@ enum tfa98xx_error tfa_run_startup(tfa98xx_handle_t handle, int profile)
 	 */
 		TFA_SET_BF_VOLATILE(handle, MANSCONF, 1);
 	}
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
+#if defined(REDUCED_REGISTER_SETTING)
 	first_after_boot[handle] = 0;
 #endif
 
@@ -4346,8 +4284,8 @@ tfa_run_wait_calibration(tfa98xx_handle_t handle, int *calibrate_done)
 		}
 
 		if (tries_mtp_busy < MTPBWAIT_TRIES) {
-			/* Because of the msleep TFA98XX_API_WAITRESULT_NTRIES is way to long!
-			 * Setting this to 25 will take it atleast 25*50ms = 1.25 sec
+			/* Because of the msleep TFA98XX_API_WAITRESULT_NTRIES is way to long! 
+			 * Setting this to 25 will take it atleast 25*50ms = 1.25 sec 
 			 */
 			while ((*calibrate_done == 0)
 				&& (tries < MTPEX_WAIT_NTRIES)) {
@@ -4515,19 +4453,13 @@ enum tfa_error tfa_start(int next_profile, int *vstep)
 #if defined(TFA_USE_DEVICE_SPECIFIC_CONTROL)
 		if (active_handle != -1) {
 			if (dev != active_handle) {
-				tfa_set_swprof(dev,
-					(unsigned short)next_profile);
-				tfa_set_swvstep(dev,
-					(unsigned short)
-					tfa_cont_get_current_vstep(dev));
-
 				err = _tfa_stop(dev); /* stop inactive handle */
 				continue;
 			}
 		}
 #endif
 
-		pr_debug("%s: device[%d] [%s] - tfa_run_speaker_boost profile=%d\n",
+		pr_debug("%s: device[%d] [%s] - tfa_run_speaker_boost profile=%d\n", 
 			__func__, dev, tfa_cont_device_name(dev), profile);
 
 		/* Check if we need coldstart or ACS is set */
@@ -4558,9 +4490,16 @@ enum tfa_error tfa_start(int next_profile, int *vstep)
 		}
 
 #if defined(TFA_USE_DEVICE_SPECIFIC_CONTROL)
-		if (active_handle != -1)
-			if (dev != active_handle)
+		if (active_handle != -1) {
+			if (dev != active_handle) {
+				tfa_set_swprof(dev,
+					(unsigned short)next_profile);
+				tfa_set_swvstep(dev,
+					(unsigned short)
+					tfa_cont_get_current_vstep(dev));
 				continue;
+			}
+		}
 #endif
 
 		/* check if the profile and steps are the one we want */
@@ -4599,7 +4538,7 @@ enum tfa_error tfa_start(int next_profile, int *vstep)
 			err = show_current_state(dev);
 
 #ifdef __KERNEL__
-		/* To write something in state 6 we need to be sure that SBSL is also set in IOMEM!
+		/* To write something in state 6 we need to be sure that SBSL is also set in IOMEM! 
 		 * More information can be found in the document about the powerswitch
 		 */
 		if (tfa98xx_dev_family(dev) == 2) {
@@ -4658,24 +4597,8 @@ error_exit:
 		if (tfa98xx_runtime_verbose && (tfa98xx_dev_family(dev) == 2))
 			show_current_state(dev);
 
-	if (err != TFA98XX_ERROR_OK) {
-		pr_err("%s: failed to enable device [%d] (error %d)\n",
-			__func__, dev, err);
-		tfa98xx_log_start_cnt--;
-	}
-
-	for (dev = 0; dev < devcount; dev++) {
+	for (dev = 0; dev < devcount; dev++)
 		tfa_cont_close(dev); /* close all of them */
-
-#if defined(CONFIG_SND_SOC_TFA9872_REDUCED_SETTING)
-		if (err != TFA98XX_ERROR_OK && tfa98xx_log_start_cnt == 0) {
-			pr_info("%s: [%d] reset flag to write registers\n",
-				__func__, dev);
-			first_after_boot[dev] = 1;
-		}
-#endif
-
-	}
 
 	return err;
 }
@@ -5678,7 +5601,6 @@ enum tfa98xx_error tfa_tfadsp_calibrate(tfa98xx_handle_t handle)
 {
 	enum tfa98xx_error err = TFA98XX_ERROR_OK;
 	int cal_prof_idx = 0, cur_prof_idx = 0;
-	int i, spkr_count = 1;
 
 	if ((handles_local[handle].stream_state & BIT_PSTREAM) != 1) {
 		pr_info("%s: no playback; speaker init calibration fail\n",
@@ -5688,21 +5610,16 @@ enum tfa98xx_error tfa_tfadsp_calibrate(tfa98xx_handle_t handle)
 
 	pr_info("%s: begin\n", __func__);
 
-	err = tfa98xx_supported_speakers(handle, &spkr_count);
-
-	for (i = 0; i < spkr_count; i++) {
-		if (TFA_GET_BF(i, MTPEX) == 1) {
-			pr_debug("[%d] speaker is already calibrated; reset MTPEX first\n",
-				i);
-			/* reset MTPEX */
-			err = tfa98xx_set_mtp(i,
-				0 << TFA98XX_KEY2_PROTECTED_MTP0_MTPEX_POS,
-				TFA98XX_KEY2_PROTECTED_MTP0_MTPEX_MSK);
-			if (err) {
-				pr_err("%s: [%d] setting MPTEX failed, err (%d)\n",
-					__func__, i, err);
-				return TFA98XX_ERROR_RPC_CALIB_FAILED;
-			}
+	if (TFA_GET_BF(handle, MTPEX) == 1) {
+		pr_debug("speaker is already calibrated; reset MTPEX first\n");
+		/* reset MTPEX */
+		err = tfa98xx_set_mtp(handle,
+			0 << TFA98XX_KEY2_PROTECTED_MTP0_MTPEX_POS,
+			TFA98XX_KEY2_PROTECTED_MTP0_MTPEX_MSK);
+		if (err) {
+			pr_err("%s: setting MPTEX failed, err (%d)\n",
+				__func__, err);
+			return TFA98XX_ERROR_RPC_CALIB_FAILED;
 		}
 	}
 
@@ -5714,17 +5631,15 @@ enum tfa98xx_error tfa_tfadsp_calibrate(tfa98xx_handle_t handle)
 	/* set cal profile */
 	pr_info("%s: set profile for calibration cal_prof_idx %d (from %d)\n",
 		__func__, cal_prof_idx, cur_prof_idx);
-	for (i = 0; i < spkr_count; i++) {
-		handles_local[i].is_bypass = 0; // force at calibration
-		err = tfa_cont_write_files(i);
-		PRINT_ASSERT(err);
-		err = tfa_cont_write_regs_prof(i, cal_prof_idx);
-		PRINT_ASSERT(err);
-		err = tfa_cont_write_files_prof(i, cal_prof_idx, 0);
-		PRINT_ASSERT(err);
+	handles_local[handle].is_bypass = 0; // force at calibration
+	err = tfa_cont_write_files(handle);
+	PRINT_ASSERT(err);
+	err = tfa_cont_write_regs_prof(handle, cal_prof_idx);
+	PRINT_ASSERT(err);
+	err = tfa_cont_write_files_prof(handle, cal_prof_idx, 0);
+	PRINT_ASSERT(err);
 
-		tfa_set_swprof(i, (unsigned short)cal_prof_idx);
-	}
+	tfa_set_swprof(handle, (unsigned short)cal_prof_idx);
 
 	pr_info("%s: set_calibration (cal)\n", __func__);
 	/* SetRe25C with {0, 0} */
@@ -5747,22 +5662,25 @@ enum tfa98xx_error tfa_tfadsp_calibrate(tfa98xx_handle_t handle)
 	/* restore profile */
 	pr_info("%s: set profile for restoration cur_prof_idx %d\n",
 		__func__, cur_prof_idx);
-	for (i = 0; i < spkr_count; i++) {
-		handles_local[i].is_bypass = 1; // reset before start
-		err = tfa_cont_write_files(i);
-		PRINT_ASSERT(err);
-		err =  tfa_cont_write_regs_prof(i, cur_prof_idx);
-		PRINT_ASSERT(err);
-		err = tfa_cont_write_files_prof(i, cur_prof_idx, 0);
-		PRINT_ASSERT(err);
+	handles_local[handle].is_bypass = 1; // reset before start
+	err = tfa_cont_write_files(handle);
+	PRINT_ASSERT(err);
+	err =  tfa_cont_write_regs_prof(handle, cur_prof_idx);
+	PRINT_ASSERT(err);
+	err = tfa_cont_write_files_prof(handle, cur_prof_idx, 0);
+	PRINT_ASSERT(err);
 
-		tfa_set_swprof(i, (unsigned short)cur_prof_idx);
+	tfa_set_swprof(handle, (unsigned short)cur_prof_idx);
 
-		pr_info("%s: set_calibration (post-cal)\n", __func__);
-		/* SetRe25C with calibrated values */
-		err = tfa_set_calibration_values(i);
-		PRINT_ASSERT(err);
-	}
+	pr_info("%s: set_calibration (post-cal)\n", __func__);
+	/* SetRe25C with {0, 0} */
+#if defined(SET_CALIBRATION_AT_ALL_DEVICE_READY)
+	/* force to set calibrate all by calling last device */
+	err = tfa_set_calibration_values(tfa98xx_cnt_max_device() - 1);
+#else
+	err = tfa_set_calibration_values(handle);
+#endif
+	PRINT_ASSERT(err);
 
 	pr_info("%s: end\n", __func__);
 
@@ -6036,19 +5954,6 @@ wait_calibrate_done_error_exit:
 #define LOWER_LIMIT_CAL_S_N1A 6900
 #define UPPER_LIMIT_CAL_S_N1A 8700
 #elif defined(CONFIG_MACH_SDM845_JUDYPN) // Storm
-#define LOWER_LIMIT_CAL_N3B 0
-#define UPPER_LIMIT_CAL_N3B 8000
-#define LOWER_LIMIT_CAL_N1A 0
-#define UPPER_LIMIT_CAL_N1A 8000
-#define LOWER_LIMIT_CAL_P_N3B 0
-#define UPPER_LIMIT_CAL_P_N3B 32000
-#define LOWER_LIMIT_CAL_P_N1A 0
-#define UPPER_LIMIT_CAL_P_N1A 32000
-#define LOWER_LIMIT_CAL_S_N3B 0
-#define UPPER_LIMIT_CAL_S_N3B 8000
-#define LOWER_LIMIT_CAL_S_N1A 0
-#define UPPER_LIMIT_CAL_S_N1A 8000
-#elif defined(CONFIG_MACH_SDM845_STYLE3LM_DCM_JP) // style3
 #define LOWER_LIMIT_CAL_N3B 0
 #define UPPER_LIMIT_CAL_N3B 8000
 #define LOWER_LIMIT_CAL_N1A 0

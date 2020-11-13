@@ -1,884 +1,861 @@
 /*
- *  ES9218P Device Driver.
+ * ES9218P Linux Driver
  *
- *  This program is device driver for ES9218P chip set.
- *  The ES9218P is a high-performance 32-bit, 2-channel audio SABRE HiFi D/A converter
- *  with headphone amplifier, analog volume control and output switch designed for
- *  audiophile-grade portable application such as mobile phones and digital music player,
- *  consumer applications such as USB DACs and A/V receivers, as well as professional
- *  such as mixer consoles and digital audio workstations.
+ * The ES9218P is a high-performance 32-bit, 2-channel audio SABRE HiFi D/A
+ * converter with headphone amplifier, analog volume control and output switch
+ * designed for audiophile-grade portable application such as mobile phones and
+ * digital music player, audiophile-grade portable application such as mobile
+ * phones and digital music player, consumer applications such as USB DACs and
+ * A/V receivers, as well as professional consumer applications such as USB
+ * DACs and A/V receivers, as well as professional such as mixer consoles and
+ * digital audio workstations.
  *
- *  Copyright (C) 2016, ESS Technology International Ltd.
- *
+ * Copyright (c) 2016, ESS Technology International Ltd.
+ * Copyright (c) 2020, Diab Neiroukh
  */
 
-#include    <linux/module.h>
-#include    <linux/moduleparam.h>
-#include    <linux/init.h>
-#include    <linux/slab.h>
-#include    <linux/delay.h>
-#include    <linux/pm.h>
-#include    <linux/platform_device.h>
-#include    <linux/pm_wakeup.h>
-#include    <sound/core.h>
-#include    <sound/pcm.h>
-#include    <sound/pcm_params.h>
-#include    <sound/soc.h>
-#include    <sound/initval.h>
-#include    <sound/tlv.h>
-#include    <trace/events/asoc.h>
-#include    <linux/of_gpio.h>
-#include    <linux/gpio.h>
-#include    <linux/i2c.h>
-#include    <linux/fs.h>
-#include    <linux/string.h>
-#include    <linux/clk.h>
+#include <linux/delay.h>
+#include <linux/fs.h>
+#include <linux/gpio.h>
+#include <linux/i2c.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/of_gpio.h>
+#include <linux/platform_device.h>
+#include <linux/pm.h>
+#include <linux/pm_qos.h>
+#include <linux/pm_wakeup.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+#include <sound/core.h>
+#include <sound/initval.h>
+#include <sound/pcm.h>
+#include <sound/pcm_params.h>
+#include <sound/soc.h>
+#include <sound/tlv.h>
+#include <trace/events/asoc.h>
 
-#if defined(CONFIG_ARCH_SM8150)
-#include    <linux/pm_qos.h>
+#include "es9218p.h"
+#ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
+#include "../../../../include/soc/qcom/lge/board_lge.h"
 #endif
 
-//#define     USE_CONTROL_EXTERNAL_LDO_FOR_DVDD // control a external LDO drained from PMIC
-#ifdef USE_CONTROL_EXTERNAL_LDO_FOR_DVDD
-#include    <linux/regulator/consumer.h>
+#if USE_CONTROL_EXTERNAL_LDO_FOR_DVDD == 1
+#include <linux/regulator/consumer.h>
 #endif
 
-#include    "es9218p.h"
-#include    "soc/qcom/lge/board_lge.h"
-
-#define     ES9218P_SYSFS 0              // use this feature only for user debug, not release
-
-//#define     USE_HPAHiQ                  // THD increased by ~2dB and Power Consumption increasded by ~2mA
-//#define   ES9218P_DEBUG               // ESS pop-click debugging, define to enable step by step override sequence debug messages and time delays.  Use to pinpoint pop-click.
-#define     WORKAROUND_FOR_CORNER_SAMPLES     // set ResetB high two times and send a cmd of soft reset
-#define     ENABLE_DOP_AUTO_MUTE
-#define     ENABLE_DOP_SOFT_MUTE
-#if defined(CONFIG_SND_SOC_ES9218P)
-#define     WORKAROUND_TICK_NOISE
+struct es9218_reg es9218_common_init_register[] = {
+#if 0
+	/* System Register */
+	{ ES9218P_SYSTEM_REG, 0x00 },
+	/* Input Selection */
+	{ ES9218P_INPUT_SELECT, 0x8C },
+	/* Mixing, Serial Data and Automute Configuration */
+	{ ES9218P_AUTOMUTE_CONFIG, 0x34 },
+	/* Analog Volume Control */
+	{ ES9218P_ANALOG_VOL_CTRL, 0x58 },
+	/* Automute Time */
+	{ ES9218P_AUTOMUTE_TIME, 0x00 },
+	/* Automute Level */
+	{ ES9218P_AUTOMUTE_LEVEL, 0x68 },
+	/* DoP and Volmue Ramp Rate */
+	{ ES9218P_DOP_VOL_RAMP_RATE, 0x42 },
+	/* Filter Bandwidth and System Mute */
+	{ ES9218P_FILTER_BAND_SYSTEM_MUTE, 0x80 },
+	/* GPIO{1,2} Configuration */
+	{ ES9218P_GPIO1_2_CONFIG, 0xDD },
+	/* GPIO1 Clock Debug Setting */
+	{ ES9218P_GPIO1_2_CONFIG, 0xD3 },
+	/* Master Mode and Sync Configuration */
+	{ ES9218P_MASTERMODE_SYNC_CONFIG, 0x02 },
 #endif
+	/* Overcurrent Protection */
+	{ ES9218P_OVERCURRENT_PROTECT, 0x90 },
+	/* {ASRC,DPLL} Bandwidth */
+	{ ES9218P_DPLL_BANDWIDTH, 0x8A },
+	/* THD Compensation Bypass & Mono Mode */
+	{ ES9218P_THD_COMP_MONO_MODE, 0x00 },
+	/* Soft Start Configuration */
+	{ ES9218P_SOFT_START_CONFIG, 0x07 },
+#if 0
+	/* Volume Control */
+	{ ES9218P_VOL1_CTRL, 0x50 },
+	/* Volume Control */
+	{ ES9218P_VOL2_CTRL, 0x50 },
+	/* Master Trim */
+	{ ES9218P_MASTERTRIM_4, 0xFF },
+	/* Master Trim */
+	{ ES9218P_MASTERTRIM_3, 0xFF },
+	/* Master Trim */
+	{ ES9218P_MASTERTRIM_2, 0xFF },
+	/* Master Trim */
+	{ ES9218P_MASTERTRIM_1, 0x7F },
+#endif
+	/* GPIO Input Selection */
+	{ ES9218P_GPIO_INPUT_SEL, 0x0F },
+#if 0
+	/* THD Compensation C2 (Left Channel) */
+	{ ES9218P_THD_COMP_C2_2, 0x00 },
+	/* THD Compensation C2 (Left Channel) */
+	{ ES9218P_THD_COMP_C2_1, 0x00 },
+	/* THD Compensation C2 (Left Channel) */
+	{ ES9218P_THD_COMP_C3_2, 0x00 },
+	/* THD Compensation C2 (Left Channel) */
+	{ ES9218P_THD_COMP_C3_1, 0x00 },
+	/* Charge Pump Soft Start Delay */
+	{ ES9218P_CP_SS_DELAY, 0x62 },
+#endif
+	/* Charge Pump Soft Start Delay */
+	{ ES9218P_GEN_CONFIG, 0xC4 },
+#if 0
+	/* General Confguration */
+	{ ES9218P_AUTO_CLK_GEAR, 0x00 },
+#endif
+	/* GPIO Inversion & Automatic Clock Gearing */
+	{ ES9218P_CP_CLOCK_2, 0x37 },
+	/* GPIO Inversion & Automatic Clock Gearing */
+	{ ES9218P_CP_CLOCK_1, 0x30 },
+#if 0
+	/* Amplifier Configuration */
+	{ ES9218P_AMP_CONFIG, 0x00 },
+	/* Programmable NCO */
+	{ ES9218P_NCO_NUM_4, 0x00 },
+	/* Programmable NCO */
+	{ ES9218P_NCO_NUM_3, 0x00 },
+	/* Programmable NCO */
+	{ ES9218P_NCO_NUM_2, 0x00 },
+	/* Programmable NCO */
+	{ ES9218P_NCO_NUM_1, 0x00 },
+	/* Programmable FIR RAM Address */
+	{ ES9218P_FIR_RAM_ADDR, 0x00 },
+	/* Programmable FIR RAM Data */
+	{ ES9218P_FIR_RAM_DATA_3, 0x00 },
+	/* Programmable FIR RAM Data */
+	{ ES9218P_FIR_RAM_DATA_2, 0x00 },
+	/* Programmable FIR RAM Data */
+	{ ES9218P_FIR_RAM_DATA_1, 0x00 },
+	/* Programmable FIR Configuration */
+	{ ES9218P_FIR_CONFIG, 0x00 },
+	/* Analog Control Override */
+	{ ES9218P_ANALOG_CTRL_OVERRIDE, 0x00 },
+	/* Digital Override */
+	{ ES9218P_REG46_RESERVED, 0x00 },
+	/* Reserved */
+	{ ES9218P_REG47_RESERVED, 0x00 },
+	/* Seperate Channel THD */
+	{ ES9218P_REG48_RESERVED, 0x02 },
+	/* Automatic Clock Gearing Thresholds */
+	{ ES9218P_CLK_GEAR_THRESH_3, 0x62 },
+	/* Automatic Clock Gearing Thresholds */
+	{ ES9218P_CLK_GEAR_THRESH_2, 0xC0 },
+	/* Automatic Clock Gearing Thresholds */
+	{ ES9218P_CLK_GEAR_THRESH_1, 0x0D },
+	/* THD Compensation C2 (Right Channel) */
+	{ ES9218P_REG53_RESERVED, 0x00 },
+	/* THD Compensation C2 (Right Channel) */
+	{ ES9218P_REG54_RESERVED, 0x00 },
+	/* THD Compensation C2 (Right Channel) */
+	{ ES9218P_REG55_RESERVED, 0x00 },
+	/* THD Compensation C2 (Right Channel) */
+	{ ES9218P_REG56_RESERVED, 0x00 },
+	/* DAC Analog Trim Control */
+	{ ES9218P_REG60_RESERVED, 0x00 },
+#endif
+};
+
+struct es9218_reg es9218_dop_init_register[] = {
+#if 0
+	/* Default Register */
+	{ ES9218P_SYSTEM_REG, 0x00 },
+#endif
+	/* 32-bit Serial Input Selection */
+	{ ES9218P_INPUT_SELECT, 0x80 },
+	/* Enable DoP */
+	{ ES9218P_DOP_VOL_RAMP_RATE, 0x4A },
+	/* Enable DoP Master Mode */
+	{ ES9218P_MASTERMODE_SYNC_CONFIG, 0x82 },
+#if 0
+	/* Enable DoP Master Mode */
+	{ ES9218P_MASTERMODE_SYNC_CONFIG, 0x02 },
+#endif
+#if ENABLE_DOP_AUTO_MUTE == 1
+	{ ES9218P_SOFT_START_CONFIG, 0x07 },
+#endif
+#if 0
+	/* Variable Value from AP */
+	{ ES9218P_VOL1_CTRL, 0x00 },
+	/* Variable Value from AP */
+	{ ES9218P_VOL2_CTRL, 0x00 },
+#endif
+	/* Disable Automatic Clock Gearing */
+	{ ES9218P_AUTO_CLK_GEAR, 0x00 },
+};
+
+struct es9218_reg es9218_pcm_init_register[] = {
+	/* Default Register */
+	{ ES9218P_SYSTEM_REG, 0x00 },
+#if ENABLE_DOP_AUTO_MUTE == 1
+	{ ES9218P_AUTOMUTE_CONFIG, 0x34 },
+	{ ES9218P_AUTOMUTE_TIME, 0x00 },
+#endif
+	/* Disable DoP */
+	{ ES9218P_DOP_VOL_RAMP_RATE, 0x43 },
+	/* Slave Mode */
+	{ ES9218P_MASTERMODE_SYNC_CONFIG, 0x02 },
+#if 0
+	{ ES9218P_VOL1_CTRL, 0x00 },
+	{ ES9218P_VOL2_CTRL, 0x00 },
+#endif
+	/* Disable Automatic Clock Gearing */
+	{ ES9218P_AUTO_CLK_GEAR, 0x06 },
+};
 
 static struct es9218_priv *g_es9218_priv = NULL;
-static int  es9218_write_reg(struct i2c_client *client, int reg, u8 value);
-static int  es9218_read_reg(struct i2c_client *client, int reg);
 
-static int  es9218p_sabre_hifi2lpb(void);
-static int  es9218p_sabre_bypass2hifi(void);
-
-static int  es9218p_sabre_lpb2hifione(void);
-static int  es9218p_sabre_lpb2hifitwo(void);
-static int  es9218p_sabre_hifione2lpb(void);
-static int  es9218p_sabre_hifitwo2lpb(void);
-
-static int es9218_set_avc_volume(struct i2c_client *client, int vol);
-static int  es9218p_sabre_amp_start(struct i2c_client *client, int headset);
-static int  es9218p_sabre_amp_stop(struct i2c_client *client, int headset);
-static int  es9218p_standby2lpb(void);
-static int  es9218p_lpb2standby(void);
-static int es9218p_set_volume_rate(unsigned int sample_rate, unsigned int ess_mode);
-static int es9218p_set_bit_width(unsigned int bit_width, unsigned int ess_mode);
-static void es9218p_initialize_registers(unsigned int ess_mode);
+#if ES9218P_SYSFS == 1
+/*
+ * We only include the analogue supplies here; the digital supplies need to be
+ * available well before this driver can be probed.
+ */
+struct registry_map es9218p_regmap[] = {
+	{ "00_SYSTEM_REGISTERS", ES9218P_SYSTEM_REG, 1 },
+	{ "01_INPUT_SELECTION", ES9218P_INPUT_SELECT, 1 },
+	{ "02_MIXING_&_AUTOMUTE_CONFIGURATION", ES9218P_AUTOMUTE_CONFIG, 1 },
+	{ "03_ANALOG_VOLUME_CONTROL", ES9218P_ANALOG_VOL_CTRL, 1 },
+	{ "04_AUTOMUTE_TIME", ES9218P_AUTOMUTE_TIME, 1 },
+	{ "05_AUTOMUTE_LEVEL", ES9218P_AUTOMUTE_LEVEL, 1 },
+	{ "06_DoP_&_VOLUME_RAMP_RATE", ES9218P_DOP_VOL_RAMP_RATE, 1 },
+	{ "07_FIILTER_BANDWIDTH_&_SYSTEM_MUTE", ES9218P_FILTER_BAND_SYSTEM_MUTE,
+	  1 },
+	{ "08_GPIO1-2_CONFIGURATION", ES9218P_GPIO1_2_CONFIG, 1 },
+	{ "09_RESERVED_09", ES9218P_REG09_RESERVED, 1 },
+	{ "10_MASTER_MODE_&_SYNC_CONFIGURATION", ES9218P_MASTERMODE_SYNC_CONFIG,
+	  1 },
+	{ "11_OVERCURRENT_PROTECTION", ES9218P_OVERCURRENT_PROTECT, 1 },
+	{ "12_ASRC/DPLL_BANDWIDTH", ES9218P_DPLL_BANDWIDTH, 1 },
+	{ "13_THD_COMPENSATION_BYPASS", ES9218P_THD_COMP_MONO_MODE, 1 },
+	{ "14_SOFT_START_CONFIGURATION", ES9218P_SOFT_START_CONFIG, 1 },
+	{ "15_VOLUME_CONTROL_1", ES9218P_VOL1_CTRL, 1 },
+	{ "16_VOLUME_CONTROL_2", ES9218P_VOL2_CTRL, 1 },
+	{ "17_MASTER_TRIM_3", ES9218P_MASTERTRIM_4, 1 },
+	{ "18_MASTER_TRIM_2", ES9218P_MASTERTRIM_3, 1 },
+	{ "19_MASTER_TRIM_1", ES9218P_MASTERTRIM_2, 1 },
+	{ "20_MASTER_TRIM_0", ES9218P_MASTERTRIM_1, 1 },
+	{ "21_GPIO_INPUT_SELECTION", ES9218P_GPIO_INPUT_SEL, 1 },
+	{ "22_THD_COMPENSATION_C2_2", ES9218P_THD_COMP_C2_2, 1 },
+	{ "23_THD_COMPENSATION_C2_1", ES9218P_THD_COMP_C2_1, 1 },
+	{ "24_THD_COMPENSATION_C3_2", ES9218P_THD_COMP_C3_2, 1 },
+	{ "25_THD_COMPENSATION_C3_1", ES9218P_THD_COMP_C3_1, 1 },
+	{ "26_CHARGE_PUMP_SOFT_START_DELAY", ES9218P_CP_SS_DELAY, 1 },
+	{ "27_GENERAL_CONFIGURATION", ES9218P_GEN_CONFIG, 1 },
+	{ "28_RESERVED", ES9218P_REG28_RESERVED, 1 },
+	{ "29_GIO_INVERSION_&_AUTO_CLOCK_GEAR", ES9218P_AUTO_CLK_GEAR, 1 },
+	{ "30_CHARGE_PUMP_CLOCK_2", ES9218P_CP_CLOCK_2, 1 },
+	{ "31_CHARGE_PUMP_CLOCK_1", ES9218P_CP_CLOCK_1, 1 },
+	{ "32_AMPLIFIER_CONFIGURATION", ES9218P_AMP_CONFIG, 1 },
+	{ "33_RESERVED", ES9218P_REG33_RESERVED, 1 },
+	{ "34_PROGRAMMABLE_NCO_4", ES9218P_NCO_NUM_4, 1 },
+	{ "35_PROGRAMMABLE_NCO_3", ES9218P_NCO_NUM_3, 1 },
+	{ "36_PROGRAMMABLE_NCO_2", ES9218P_NCO_NUM_2, 1 },
+	{ "37_PROGRAMMABLE_NCO_1", ES9218P_NCO_NUM_1, 1 },
+	{ "38_RESERVED_38", ES9218P_REG38_RESERVED, 1 },
+	{ "39_RESERVED_39", ES9218P_REG39_RESERVED, 1 },
+	{ "40_PROGRAMMABLE_FIR_RAM_ADDRESS", ES9218P_FIR_RAM_ADDR, 1 },
+	{ "41_PROGRAMMABLE_FIR_RAM_DATA_3", ES9218P_FIR_RAM_DATA_3, 1 },
+	{ "42_PROGRAMMABLE_FIR_RAM_DATA_2", ES9218P_FIR_RAM_DATA_2, 1 },
+	{ "43_PROGRAMMABLE_FIR_RAM_DATA_1", ES9218P_FIR_RAM_DATA_1, 1 },
+	{ "44_PROGRAMMABLE_FIR_CONFIGURATION", ES9218P_FIR_CONFIG, 1 },
+	{ "45_ANALOG_CONTROL_OVERRIDE", ES9218P_ANALOG_CTRL_OVERRIDE, 1 },
+	{ "46_DIGITAL_OVERRIDE", ES9218P_REG46_RESERVED, 1 },
+	{ "47_RESERVED", ES9218P_REG47_RESERVED, 1 },
+	{ "48_SEPERATE_CH_THD", ES9218P_REG48_RESERVED, 1 },
+	{ "49_AUTOMATIC_CLOCK_GEARING_THRESHOLDS_3", ES9218P_CLK_GEAR_THRESH_3,
+	  1 },
+	{ "50_AUTOMATIC_CLOCK_GEARING_THRESHOLDS_2", ES9218P_CLK_GEAR_THRESH_2,
+	  1 },
+	{ "51_AUTOMATIC_CLOCK_GEARING_THRESHOLDS_1", ES9218P_CLK_GEAR_THRESH_1,
+	  1 },
+	{ "52_RESERVED", ES9218P_REG52_RESERVED, 1 },
+	{ "53_THD_COMPENSATION_C2_2", ES9218P_REG53_RESERVED, 1 },
+	{ "54_THD_COMPENSATION_C2_1", ES9218P_REG54_RESERVED, 1 },
+	{ "55_THD_COMPENSATION_C3_2", ES9218P_REG55_RESERVED, 1 },
+	{ "56_THD_COMPENSATION_C3_1", ES9218P_REG56_RESERVED, 1 },
+	{ "57_RESERVED", ES9218P_REG57_RESERVED, 1 },
+	{ "58_RESERVED", ES9218P_REG58_RESERVED, 1 },
+	{ "59_RESERVED", ES9218P_REG59_RESERVED, 1 },
+	{ "60_DAC_ANALOG_TRIM_CONTROL", ES9218P_REG60_RESERVED, 1 },
+	{ "64_CHIP_STATUS", ES9218P_CHIPSTATUS, 0 },
+	{ "65_GPIO_READBACK", ES9218P_GPIO_READBACK, 0 },
+	{ "66_DPLL_NUMBER_4", ES9218P_DPLL_NUM_4, 0 },
+	{ "67_DPLL_NUMBER_3", ES9218P_DPLL_NUM_3, 0 },
+	{ "68_DPLL_NUMBER_2", ES9218P_DPLL_NUM_2, 0 },
+	{ "69_DPLL_NUMBER_1", ES9218P_DPLL_NUM_1, 0 },
+	{ "70_RESERVED", ES9218P_REG70_RESERVED, 0 },
+	{ "71_RESERVED", ES9218P_REG71_RESERVED, 0 },
+	{ "72_INPUT_SELECTION_AND_AUTOMUTE_STATUS",
+	  ES9218P_INPUT_SEL_AUTOMUTE_STATUS, 0 },
+	{ "73_RAM_COEFFEICIENT_READBACK_3", ES9218P_RAM_COEFF_OUT_3, 0 },
+	{ "74_RAM_COEFFEICIENT_READBACK_2", ES9218P_RAM_COEFF_OUT_2, 0 },
+	{ "75_RAM_COEFFEICIENT_READBACK_1", ES9218P_RAM_COEFF_OUT_1, 0 },
+};
+#endif
 
 #ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
-static int get_fade_count_define(void);
-static int get_fade_term_define(void);
-
-#define VOLUME_DOWN 0
-#define VOLUME_UP 1
-#define FADE_INOUT_COUNT 7
-#define FADE_INOUT_TERM 40
-#define SHORT_FILTER 9  // first menu item
-
-#define SHARP_FILTER 4   // second menu item
-#define SLOW_FILTER 5  // third menu item
-static struct workqueue_struct *mute_workqueue;
 struct delayed_work *mute_work;
+static struct workqueue_struct *mute_workqueue;
+#endif
+
+struct pm_qos_request req;
+
+struct sabre_custom_filter sabre_custom_ft[] = {
+	{ SABRE_FILTER_FASTROLLOFF,
+	  SABRE_FILTER_SYMMETRY_COSINE,
+
+	  { 39435,    329401,	1360560,  3599246,  6601764,  8388607,
+	    6547850,  1001610,	-4505541, -5211008, -621422,  4064305,
+	    3502332,  -1242784, -3894015, -1166807, 2855579,  2532881,
+	    -1339935, -2924582, -80367,	  2636097,  1146596,  -1970283,
+	    -1795151, 1163934,	2064146,  -376196,  -2034097, -299771,
+	    1794630,  819647,	-1427924, -1172210, 1001806,  1366909,
+	    -568081,  -1424737, 163577,	  1371999,  187673,   -1236340,
+	    -472107,  1044192,	684373,	  -819180,  -825173,  581393,
+	    899460,   -347185,	-915049,  129183,   881489,   63537,
+	    -809087,  -225092,	708188,	  352362,   -588665,  -444558,
+	    459555,   502831,	-328750,  -529834,  202807,   529247,
+	    -86947,   -505444,	-14910,	  463255,   100207,   -407601,
+	    -167645,  343169,	216913,	  -274343,  -248603,  205072,
+	    264118,   -138622,	-265371,  77610,    254603,   -24054,
+	    -234368,  -20767,	207269,	  56265,    -175733,  -82315,
+	    142067,   99291,	-108348,  -108035,  76223,    109591,
+	    -47020,   -105189,	21756,	  96258,    -966,     -84164,
+	    -15138,   70169,	26578,	  -55507,   -33729,   41164,
+	    37138,    -27899,	-37436,	  16357,    35525,    -6752,
+	    -32266,   -997,	28572,	  7574,	    -25179,   -14901,
+	    21439,    27122,	-9639,	  -47260,   -51810,   -31095,
+	    -10524,   -1533 },
+
+	  { 0, 0, 0, 0, 6917, 36010, 117457, 294022, 601886, 1056422, 1624172,
+	    2218368, 2720371, 3007535, 0, 0 } },
+
+	{ SABRE_FILTER_SLOWROLLOFF,
+	  SABRE_FILTER_SYMMETRY_COSINE,
+
+	  { 0,	      190799,	718147,	 1804532, 3481898,  5536299,  7411221,
+	    8388607,  7873874,	5714951, 2416023, -1000917, -3378693, -3938372,
+	    -2688907, -411446,	1708498, 2659931, 2122733,  557874,   -1084853,
+	    -1908449, -1574818, -414103, 821794,  1417924,  1124432,  225950,
+	    -678290,  -1054327, -761721, -67611,  563184,   761258,   480642,
+	    -38190,   -449978,	-522233, -273035, 91351,    335183,   332443,
+	    134036,   -101185,	-229380, -192459, -50752,   84442,    140173,
+	    96992,    12276,	-56785,	 -75761,  -39621,   493,      32962,
+	    38633,    17568,	-618,	 -164,	  62,	    18,	      -0,
+	    0 },
+
+	  { 6927430, 6927430, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } },
+
+	{ SABRE_FILTER_FASTROLLOFF,
+	  SABRE_FILTER_SYMMETRY_SINE,
+
+	  { -417,     1473,    3176,	 1404,	   -3339,    -2060,    4177,
+	    3291,     -5719,   -4716,	 7588,	   6691,     -10108,   -9048,
+	    13208,    11986,   -17155,	 -15435,   22004,    19525,    -28016,
+	    -24217,   35328,   29596,	 -44225,   -35626,   54922,    42351,
+	    -67758,   -49730,  83039,	 57778,	   -101197,  -66445,   122674,
+	    75734,    -148069, -85603,	 178075,   96075,    -213635,  -107173,
+	    255963,   119032,  -306783,	 -131888,  368551,   146257,   -445016,
+	    -163107,  542118,  184404,	 -669965,  -214274,  847063,   262410,
+	    -1111089, -355255, 1550405,	 584903,   -2419106, -1431913, 4642716,
+	    8388607,  4642716, -1431913, -2419106, 584903,   1550405,  -355255,
+	    -1111089, 262410,  847063,	 -214274,  -669965,  184404,   542118,
+	    -163107,  -445016, 146257,	 368551,   -131888,  -306783,  119032,
+	    255963,   -107173, -213635,	 96075,	   178075,   -85603,   -148069,
+	    75734,    122674,  -66445,	 -101197,  57778,    83039,    -49730,
+	    -67758,   42351,   54922,	 -35626,   -44225,   29596,    35328,
+	    -24217,   -28016,  19525,	 22004,	   -15435,   -17155,   11986,
+	    13208,    -9048,   -10108,	 6691,	   7588,     -4716,    -5719,
+	    3291,     4177,    -2060,	 -3339,	   1404,     3176,     1473,
+	    -417,     0 },
+
+	  { 0, 0, 0, 8997, 47076, 154163, 392557, 819728, 1472724, 2329930,
+	    3284770, 4177061, 4814439, 5043562, 0, 0 } },
+
+	{ SABRE_FILTER_FASTROLLOFF,
+	  SABRE_FILTER_SYMMETRY_SINE,
+
+	  { -3131,   -11380,   17068,	5059,	  -21148,  -10470,   41391,
+	    3177,    -60665,   6542,	88359,	  -29550,  -117174,  64953,
+	    148119,  -119646,  -174668, 195542,	  193084,  -298418,  -194946,
+	    432455,  171955,   -606753, -110716,  837093,  -7811,    -1163276,
+	    220265,  1699543,  -606879, -2904582, 1311875, 8388607,  8388607,
+	    1311875, -2904582, -606879, 1699543,  220265,  -1163276, -7811,
+	    837093,  -110716,  -606753, 171955,	  432455,  -194946,  -298418,
+	    193084,  195542,   -174668, -119646,  148119,  64953,    -117174,
+	    -29550,  88359,    6542,	-60665,	  3177,	   41391,    -10470,
+	    -21148,  5059,     17068,	-11380,	  -3131,   0,	     0,
+	    0,	     0,	       0,	0,	  0,	   0,	     0,
+	    0,	     0,	       0,	0,	  0,	   0,	     0,
+	    0,	     0,	       0,	0,	  0,	   0,	     0,
+	    0,	     0,	       0,	0,	  0,	   0,	     0,
+	    0,	     0,	       0,	0,	  0,	   0,	     0,
+	    0,	     0,	       0,	0,	  0,	   0,	     0,
+	    0,	     0,	       0,	0,	  0,	   0,	     0,
+	    0,	     0,	       0,	0,	  0,	   0,	     0,
+	    0,	     0 },
+
+	  { 0, 0, 0, 0, 0, 0, 99386, 355200, 880080, 1746102, 2801046, 3902774,
+	    4736866, 5017414, 0, 0 } },
+};
+
+struct wakeup_source wl_shutdown;
+struct wakeup_source wl_sleep;
+
+/* Tuning for the LG V40 ThinQ */
+#if defined(CONFIG_MACH_SDM845_JUDY)
+static uint8_t advance_harmonic_comp_left[4] = { 0xfe, 0x01, 0x32, 0x00 };
+static uint8_t advance_harmonic_comp_right[4] = { 0x9a, 0x01, 0x64, 0x00 };
+static uint8_t aux_harmonic_comp_left[4] = { 0x1b, 0x01, 0x0c, 0xfe };
+static uint8_t aux_harmonic_comp_right[4] = { 0xd2, 0x00, 0x34, 0xfe };
+/* Tuning for the LG G8 ThinQ */
+#elif defined(CONFIG_MACH_SM8150_ALPHA)
+static uint8_t advance_harmonic_comp_left[4] = { 0x58, 0x02, 0x3c, 0x00 };
+static uint8_t advance_harmonic_comp_right[4] = { 0x21, 0x02, 0x64, 0x00 };
+static uint8_t aux_harmonic_comp_left[4] = { 0x4a, 0x01, 0xe4, 0xfd };
+static uint8_t aux_harmonic_comp_right[4] = { 0x04, 0x01, 0x0c, 0xfe };
+/* Tuning for the LG V50 ThinQ */
+#elif defined(CONFIG_MACH_SM8150_FLASH)
+static uint8_t advance_harmonic_comp_left[4] = { 0x76, 0x02, 0x3c, 0x00 };
+static uint8_t advance_harmonic_comp_right[4] = { 0x53, 0x02, 0x32, 0x00 };
+static uint8_t aux_harmonic_comp_left[4] = { 0x5e, 0x01, 0xd0, 0xfd };
+static uint8_t aux_harmonic_comp_right[4] = { 0x22, 0x01, 0xee, 0xfd };
+#else
+static uint8_t advance_harmonic_comp_left[4] = { 0x30, 0x02, 0x3c, 0x00 };
+static uint8_t advance_harmonic_comp_right[4] = { 0xd6, 0x01, 0x3c, 0x00 };
+static uint8_t aux_harmonic_comp_left[4] = { 0x72, 0x01, 0x84, 0xfe };
+static uint8_t aux_harmonic_comp_right[4] = { 0x3b, 0x01, 0x98, 0xfe };
+#endif
+
+static const uint8_t avc_vol_tbl[] = {
+	0x40, /* 0dB */
+	0x41, /* -1dB */
+	0x42, /* -2dB */
+	0x43, /* -3dB */
+	0x44, /* -4dB */
+	0x45, /* -5dB */
+	0x46, /* -6dB */
+	0x47, /* -7dB */
+	0x48, /* -8dB */
+	0x49, /* -9dB */
+	0x4A, /* -10dB */
+	0x4B, /* -11dB */
+	0x4C, /* -12dB */
+	0x4D, /* -13dB */
+	0x4E, /* -14dB */
+	0x4F, /* -15dB */
+	0X50, /* -16dB */
+	0X51, /* -17dB */
+	0X52, /* -18dB */
+	0X53, /* -19dB */
+	0X54, /* -20dB */
+	0X55, /* -21dB */
+	0X56, /* -22dB */
+	0X57, /* -23dB */
+	0X58, /* -24dB */
+};
+
+static int call_common_init_registers = 0;
+
+static unsigned int es9218_bps = 16;
+static unsigned int es9218_is_amp_on = 0;
+#if ES9218P_NCO == 1
+static unsigned int es9218_mclk = 49152000;
+#endif
+static unsigned int es9218_power_state = ESS_PS_CLOSE;
+static unsigned int es9218_rate = 48000;
+static unsigned int es9218_start = 0;
+
+#ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
 static int fade_direction = VOLUME_DOWN;
 static int fade_count_debug_param = 99;
 static int fade_term_debug_param = 99;
-static int g_fade_count;
-static int g_right_fade_vol_per_step = 0;
-static int g_left_fade_vol_per_step = 0;
-static int g_left_fade_vol = 0;
-static int g_right_fade_vol = 0;
-bool lge_ess_fade_inout_init = false;
-#endif
-struct es9218_reg {
-    unsigned char   num;
-    unsigned char   value;
-};
-
-struct wakeup_source wl_sleep;
-struct wakeup_source wl_shutdown;
-
-#if defined(CONFIG_ARCH_SM8150)
-struct pm_qos_request req;
-#endif
-#ifdef ES9219C
-static struct clk *hifi_ext_mclk;
 #endif
 
-/*
- *  We only include the analogue supplies here; the digital supplies
- *  need to be available well before this driver can be probed.
- */
-
-struct es9218_reg es9218_common_init_registers[] = {
-//will be upadated  { ES9218P_REG_00,        0x00 },    // System Register
-//will be upadated  { ES9218P_REG_01,        0x8c },    // Input selection
-//default           { ES9218P_REG_02,        0x34 },    // Mixing, Serial Data and Automute Configuration
-//will be upadated  { ES9218P_REG_03,        0x58 },    // Analog Volume Control
-//default           { ES9218P_REG_04,        0x00 },    // Automute Time
-//default           { ES9218P_REG_05,        0x68 },    // Automute Level
-//will be upadated  { ES9218P_REG_06,        0x42 },    // DoP and Volmue Ramp Rate
-//will be upadated  { ES9218P_REG_07,        0x80 },    // Filter Bandwidth and System Mute
-//default           { ES9218P_REG_08,        0xdd },    // GPIO1-2 Confgiguratioin
-//			{ ES9218P_REG_08,        0xd3 },    // GPIO1 clk debug setting
-
-//will be upadated  { ES9218P_REG_10,        0x02 },    // Master Mode and Sync Configuration
-                    { ES9218P_REG_11,        0x90 },    // Overcureent Protection
-                    { ES9218P_REG_12,        0x8a },    // ASRC/DPLL Bandwidth
-                    { ES9218P_REG_13,        0x00 },    // THD Compensation Bypass & Mono Mode
-#ifdef ES9219C
-                    { ES9218P_REG_14,        0x25 },    // Soft Start Configuration // updated_ESS_1122
-#else
-                    { ES9218P_REG_14,        0x07 },    // Soft Start Configuration
-#endif
-//will be upadated  { ES9218P_REG_15,        0x50 },    // Volume Control
-//will be upadated  { ES9218P_REG_16,        0x50 },    // Volume Control
-//will be upadated  { ES9218P_REG_17,        0xff },    // Master Trim
-//will be upadated  { ES9218P_REG_18,        0xff },    // Master Trim
-//will be upadated  { ES9218P_REG_19,        0xff },    // Master Trim
-//will be upadated  { ES9218P_REG_20,        0x7f },    // Master Trim
-#ifdef ES9219C
-                    { ES9218P_REG_21,        0x0d },    // GPIO Input Selection  // updated_ESS_1122
-#else
-                    { ES9218P_REG_21,        0x0f },    // GPIO Input Selection
-#endif
-//will be upadated  { ES9218P_REG_22,        0x00 },    // THD Compensation C2 (left)
-//will be upadated  { ES9218P_REG_23,        0x00 },    // THD Compensation C2 (left)
-//will be upadated  { ES9218P_REG_24,        0x00 },    // THD Compensation C3 (left)
-//will be upadated  { ES9218P_REG_25,        0x00 },    // THD Compensation C3 (left)
-//will be upadated  { ES9218P_REG_26,        0x62 },    // Charge Pump Soft Start Delay
-                    { ES9218P_REG_27,        0xc4 },    // Charge Pump Soft Start Delay
-//will be upadated  { ES9218P_REG_29,        0x00 },    // General Confguration
-                    { ES9218P_REG_30,        0x37 },    // GPIO Inversion & Automatic Clock Gearing
-                    { ES9218P_REG_31,        0x30 },    // GPIO Inversion & Automatic Clock Gearing
-//will be upadated  { ES9218P_REG_32,        0x00 },    // Amplifier Configuration
-//default           { ES9218P_REG_34,        0x00 },    // Programmable NCO
-//default           { ES9218P_REG_35,        0x00 },    // Programmable NCO
-//default           { ES9218P_REG_36,        0x00 },    // Programmable NCO
-//default           { ES9218P_REG_37,        0x00 },    // Programmable NCO
-//default           { ES9218P_REG_40,        0x00 },    // Programmable FIR RAM Address
-//default           { ES9218P_REG_41,        0x00 },    // Programmable FIR RAM Data
-//default           { ES9218P_REG_42,        0x00 },    // Programmable FIR RAM Data
-//default           { ES9218P_REG_43,        0x00 },    // Programmable FIR RAM Data
-//will be upadated  { ES9218P_REG_44,        0x00 },    // Programmable FIR Configuration
-//will be upadated  { ES9218P_REG_45,        0x00 },    // Analog Control Override
-//will be upadated  { ES9218P_REG_46,        0x00 },    // dig_over_en/reserved/apdb/cp_clk_sel/reserved
-//will be upadated  { ES9218P_REG_47,        0x00 },    // enfcb/encp_oe/enaux_oe/cpl_ens/cpl_enw/sel3v3_ps/ensm_ps/sel3v3_cph
-//will be upadated  { ES9218P_REG_48,        0x02 },    // reserved/enhpa_out/reverved
-//default           { ES9218P_REG_49,        0x62 },    // Automatic Clock Gearing Thresholds
-//default           { ES9218P_REG_50,        0xc0 },    // Automatic Clock Gearing Thresholds
-//default           { ES9218P_REG_51,        0x0d },    // Automatic Clock Gearing Thresholds
-//will be upadated  { ES9218P_REG_53,        0x00 },    // THD Compensation C2 (Right)
-//will be upadated  { ES9218P_REG_54,        0x00 },    // THD Compensation C2 (Right)
-//will be upadated  { ES9218P_REG_55,        0x00 },    // THD Compensation C3 (Right)
-//will be upadated  { ES9218P_REG_56,        0x00 },    // THD Compensation C3 (Right)
-//default           { ES9218P_REG_60,        0x00 },    // DAC Analog Trim Control
-};
-
-struct es9218_reg   es9218_PCM_init_register[] = {
-	{ ES9218P_REG_00,        0x00 },    // System Register - 0x00(default)
-#ifdef ENABLE_DOP_AUTO_MUTE
-#ifdef ES9219C
-	{ ES9218P_REG_02,        0x14 },    // Mixing, Serial Data and Automute Configuration // updated_ESS_1122
-#else
-	{ ES9218P_REG_02,        0x34 },    // Mixing, Serial Data and Automute Configuration
-#endif
-	{ ES9218P_REG_04,		 0x00 },	// Automute Time
-#endif /* ENABLE_DOP_AUTO_MUTE */
-	{ ES9218P_REG_06,        0x43 },    // DoP and Volmue Ramp Rate - 0x42 DoP disabled
-	{ ES9218P_REG_10,        0x02 },    // Master Mode and Sync Configuration - 0x02 : Slave mode
-//will be upadated    { ES9218P_REG_15,        0x00 },    // Volume Control - not used
-//will be upadated    { ES9218P_REG_16,        0x00 },    // Volume Control - not used
-#ifdef ES9219C
-    { ES9218P_REG_29,        0x00 },    // General Confguration - Max. M/2-0x05, M/4-0x06, M/8-0x07 , //es9218p 0x06 , es9219 0x00
-#else
-    { ES9218P_REG_29,        0x06 },    // General Confguration - Max. M/2-0x05, M/4-0x06, M/8-0x07
-#endif
-};
-
-struct es9218_reg   es9218_DOP_init_register[] = {
-//will be upadated    { ES9218P_REG_00,        0x00 },    // System Register - 0x00 : MCLK/1 : DOP128(Default), 0x04 : MCLK/2 : DOP64
-    { ES9218P_REG_01,        0x80 },    // Input selection - 0x80 : 32bit-serial only
-	{ ES9218P_REG_06, 	     0x4a },	  // DoP and Volmue Ramp Rate - 0x4a : DoP(64/128) enable
-    { ES9218P_REG_10,        0x82 },    // Master Mode and Sync Configuration - 0x82 : DoP64/128 Master mode enable
-//        { ES9218P_REG_10,  0x02 },    // Master Mode and Sync Configuration - 0x82 : DoP64/128 Master mode enable
-#ifdef ENABLE_DOP_AUTO_MUTE
-    { ES9218P_REG_14,		 0x07 },	// Soft Start Configuration
-#endif /* ENABLE_DOP_AUTO_MUTE */
-//will be upadated    { ES9218P_REG_15,        0x00 },    // Volume Control - 0x0? : Variable Value from AP
-//will be upadated    { ES9218P_REG_16,        0x00 },    // Volume Control - 0x0? : Variable Value from AP
-    { ES9218P_REG_29,        0x00 },    // General Confguration - 0x00 : auto-gear disable
-};
-
-#ifdef ES9219C
-static const u32 master_trim_tbl[] = {
-    /*  0   db */   0x7FFFFFFF,
-    /*- 0.5 db */   0x78D6FC9D,
-    /*- 1   db */   0x721482BF,
-    /*- 1.1 db */   0x70C6359E,     // ESS_0104
-    /*- 1.2 db */   0x6F7BBC22,     // ESS_0104
-    /*- 1.3 db */   0x6E350B12,     // ESS_0104
-    /*- 1.4 db */   0x6CF2175A,     // ESS_0104
-    /*- 1.5 db */   0x6BB2D603,
-    /*- 1.6 db */   0x6A773C38,     // ESS_0103
-    /*- 1.7 db */   0x693F3F44,     // ESS_0103
-    /*- 1.8 db */   0x680AD491,     // ESS_0103
-    /*- 1.9 db */   0x66D9F1A7,     // ESS_0103
-    /*- 2   db */   0x65AC8C2E,
-    /*-2.2 dB */	  0x635C10C4,   // updated_ESS_1122
-    /*- 2.5 db */   0x5FFC888F,
-    /*- 3   db */   0x5A9DF7AA,
-    /*- 3.5 db */   0x558C4B21,
-    /*- 4   db */   0x50C335D3,
-    /*- 4.5 db */   0x4C3EA838,
-    /*- 5   db */   0x47FACCEF,
-    /*- 5.5 db */   0x43F4057E,
-    /*- 6   db */   0x4026E73C,
-    /*- 6.5 db */   0x3C90386F,
-    /*- 7   db */   0x392CED8D,
-    /*- 7.5 db */   0x35FA26A9,
-    /*- 8   db */   0x32F52CFE,
-    /*- 8.5 db */   0x301B70A7,
-    /*- 9   db */   0x2D6A866F,
-    /*- 9.5 db */   0x2AE025C2,
-    /*- 10  db */   0x287A26C4,
-    /*- 10.5db */   0x26368073,
-    /*- 11  db */   0x241346F5,
-    /*- 11.5db */   0x220EA9F3,
-    /*- 12  db */   0x2026F30F,
-    /*- 12.5db */   0x1E5A8471,
-    /*- 13  db */   0x1CA7D767,
-    /*- 13.5db */   0x1B0D7B1B,
-    /*- 14  db */   0x198A1357,
-    /*- 14.5db */   0x181C5761,
-    /*- 15  db */   0x16C310E3,
-    /*- 15.5db */   0x157D1AE1,
-    /*- 16  db */   0x144960C5,
-    /*- 16.5db */   0x1326DD70,
-    /*- 17  db */   0x12149A5F,
-    /*- 17.5db */   0x1111AEDA,
-    /*- 18  db */   0x101D3F2D,
-    /*- 18.5db */   0xF367BED,
-    /*- 19  db */   0xE5CA14C,
-    /*- 19.5db */   0xD8EF66D,
-    /*- 20  db */   0xCCCCCCC,
-    /*- 20.5db */   0xC157FA9,
-    /*- 21  db */   0xB687379,
-    /*- 21.5db */   0xAC51566,
-    /*- 22  db */   0xA2ADAD1,
-    /*- 22.5db */   0x99940DB,
-    /*- 23  db */   0x90FCBF7,
-    /*- 23.5db */   0x88E0783,
-    /*- 24  db */   0x8138561,
-    /*- 24.5db */   0x79FDD9F,
-    /*- 25  db */   0x732AE17,
-    /*- 25.5db */   0x6CB9A26,
-    /*- 26  db */   0x66A4A52,
-    /*- 26.5db */   0x60E6C0B,
-    /*- 27  db */   0x5B7B15A,
-    /*- 27.5db */   0x565D0AA,
-    /*- 28  db */   0x518847F,
-    /*- 28.5db */   0x4CF8B43,
-    /*- 29  db */   0x48AA70B,
-    /*- 29.5db */   0x4499D60,
-    /*- 30  db */   0x40C3713,
-    /*- 30.5db */   0x3D2400B,
-    /*- 31  db */   0x39B8718,
-    /*- 31.5db */   0x367DDCB,
-    /*- 32  db */   0x337184E,
-    /*- 32.5db */   0x3090D3E,
-    /*- 33  db */   0x2DD958A,
-    /*- 33.5db */   0x2B48C4F,
-    /*- 34  db */   0x28DCEBB,
-    /*- 34.5db */   0x2693BF0,
-    /*- 35  db */   0x246B4E3,
-    /*- 35.5db */   0x2261C49,
-    /*- 36  db */   0x207567A,
-    /*- 36.5db */   0x1EA4958,
-    /*- 37  db */   0x1CEDC3C,
-    /*- 37.5db */   0x1B4F7E2,
-    /*- 38  db */   0x19C8651,
-    /*- 38.5db */   0x18572CA,
-    /*- 39  db */   0x16FA9BA,
-    /*- 39.5db */   0x15B18A4,
-    /*- 40  db */   0x147AE14,
-};
-#else
-static const u32 master_trim_tbl[] = {
-    /*  0   db */   0x7FFFFFFF,
-    /*- 0.5 db */   0x78D6FC9D,
-    /*- 1   db */   0x721482BF,
-    /*- 1.5 db */   0x6BB2D603,
-    /*- 2   db */   0x65AC8C2E,
-    /*- 2.5 db */   0x5FFC888F,
-    /*- 3   db */   0x5A9DF7AA,
-    /*- 3.5 db */   0x558C4B21,
-    /*- 4   db */   0x50C335D3,
-    /*- 4.5 db */   0x4C3EA838,
-    /*- 5   db */   0x47FACCEF,
-    /*- 5.5 db */   0x43F4057E,
-    /*- 6   db */   0x4026E73C,
-    /*- 6.5 db */   0x3C90386F,
-    /*- 7   db */   0x392CED8D,
-    /*- 7.5 db */   0x35FA26A9,
-    /*- 8   db */   0x32F52CFE,
-    /*- 8.5 db */   0x301B70A7,
-    /*- 9   db */   0x2D6A866F,
-    /*- 9.5 db */   0x2AE025C2,
-    /*- 10  db */   0x287A26C4,
-    /*- 10.5db */   0x26368073,
-    /*- 11  db */   0x241346F5,
-    /*- 11.5db */   0x220EA9F3,
-    /*- 12  db */   0x2026F30F,
-    /*- 12.5db */   0x1E5A8471,
-    /*- 13  db */   0x1CA7D767,
-    /*- 13.5db */   0x1B0D7B1B,
-    /*- 14  db */   0x198A1357,
-    /*- 14.5db */   0x181C5761,
-    /*- 15  db */   0x16C310E3,
-    /*- 15.5db */   0x157D1AE1,
-    /*- 16  db */   0x144960C5,
-    /*- 16.5db */   0x1326DD70,
-    /*- 17  db */   0x12149A5F,
-    /*- 17.5db */   0x1111AEDA,
-    /*- 18  db */   0x101D3F2D,
-    /*- 18.5db */   0xF367BED,
-    /*- 19  db */   0xE5CA14C,
-    /*- 19.5db */   0xD8EF66D,
-    /*- 20  db */   0xCCCCCCC,
-    /*- 20.5db */   0xC157FA9,
-    /*- 21  db */   0xB687379,
-    /*- 21.5db */   0xAC51566,
-    /*- 22  db */   0xA2ADAD1,
-    /*- 22.5db */   0x99940DB,
-    /*- 23  db */   0x90FCBF7,
-    /*- 23.5db */   0x88E0783,
-    /*- 24  db */   0x8138561,
-    /*- 24.5db */   0x79FDD9F,
-    /*- 25  db */   0x732AE17,
-    /*- 25.5db */   0x6CB9A26,
-    /*- 26  db */   0x66A4A52,
-    /*- 26.5db */   0x60E6C0B,
-    /*- 27  db */   0x5B7B15A,
-    /*- 27.5db */   0x565D0AA,
-    /*- 28  db */   0x518847F,
-    /*- 28.5db */   0x4CF8B43,
-    /*- 29  db */   0x48AA70B,
-    /*- 29.5db */   0x4499D60,
-    /*- 30  db */   0x40C3713,
-    /*- 30.5db */   0x3D2400B,
-    /*- 31  db */   0x39B8718,
-    /*- 31.5db */   0x367DDCB,
-    /*- 32  db */   0x337184E,
-    /*- 32.5db */   0x3090D3E,
-    /*- 33  db */   0x2DD958A,
-    /*- 33.5db */   0x2B48C4F,
-    /*- 34  db */   0x28DCEBB,
-    /*- 34.5db */   0x2693BF0,
-    /*- 35  db */   0x246B4E3,
-    /*- 35.5db */   0x2261C49,
-    /*- 36  db */   0x207567A,
-    /*- 36.5db */   0x1EA4958,
-    /*- 37  db */   0x1CEDC3C,
-    /*- 37.5db */   0x1B4F7E2,
-    /*- 38  db */   0x19C8651,
-    /*- 38.5db */   0x18572CA,
-    /*- 39  db */   0x16FA9BA,
-    /*- 39.5db */   0x15B18A4,
-    /*- 40  db */   0x147AE14,
-};
-#endif
-static const u8 avc_vol_tbl[] = {
-    /*  0   db */   0x40,
-    /*- 1   db */   0x41,
-    /*- 2   db */   0x42,
-    /*- 3   db */   0x43,
-    /*- 4   db */   0x44,
-    /*- 5   db */   0x45,
-    /*- 6   db */   0x46,
-    /*- 7   db */   0x47,
-    /*- 8   db */   0x48,
-    /*- 9   db */   0x49,
-    /*- 10  db */   0x4A,
-    /*- 11  db */   0x4B,
-    /*- 12  db */   0x4C,
-    /*- 13  db */   0x4D,
-    /*- 14  db */   0x4E,
-    /*- 15  db */   0x4F,
-    /*- 16  db */   0X50,
-    /*- 17  db */   0X51,
-    /*- 18  db */   0X52,
-    /*- 19  db */   0X53,
-    /*- 20  db */   0X54,
-    /*- 21  db */   0X55,
-    /*- 22  db */   0X56,
-    /*- 23  db */   0X57,
-    /*- 24  db */   0X58,
-};
-
-static const char *power_state[] = {
-    "CLOSE",
-    "OPEN",
-    "BYPASS",
-    "HIFI",
-    "IDLE",
-    "ACTIVE",
-};
-
-static unsigned int es9218_start = 0;
-static unsigned int es9218_power_state = ESS_PS_CLOSE;
-static unsigned int es9218_is_amp_on = 0;
-static unsigned int es9218_bps = 16;
-static unsigned int es9218_rate = 48000;
-#ifdef ES9218P_NCO
-static unsigned int es9218_mclk = 49152000;
-#endif
-static int g_headset_type = 0;
-static int g_avc_volume = 0;
-static int g_volume = 0;
-static int g_left_volume = 0;
-static int g_right_volume = 0;
-static int g_sabre_cf_num = 8; // default = 8
-static int g_dop_flag = 0;
-
-#ifdef ES9218P_SYSFS
-static int forced_headset_type = -1;
+#if ES9218P_SYSFS == 1
 static int forced_avc_volume = -1;
+static int forced_headset_type = -1;
 #endif
 
 static int g_auto_mute_flag = 0;
-#ifdef ES9218P_DEBUG
-static int g_debug_delay = 500; // ESS pop-click debugging step time delay
+static int g_avc_volume = 0;
+#if ES9218P_DEBUG == 1
+/* The time delay for ESS pop-click debugging. */
+static int g_debug_delay = 500;
+#endif
+static int g_dop_flag = 0;
+int g_ess_rev = 2;
+bool g_ess_rev_check = false;
+#ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
+static int g_fade_count;
+#endif
+static int g_headset_type = 0;
+#ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
+static int g_left_fade_vol_per_step = 0;
+static int g_left_fade_vol = 0;
+#endif
+static int g_left_volume = 0;
+#ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
+static int g_right_fade_vol_per_step = 0;
+static int g_right_fade_vol = 0;
+#endif
+static int g_right_volume = 0;
+static int g_sabre_cf_num = 8;
+static int g_volume = 0;
+
+#ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
+bool lge_ess_fade_inout_init = false;
 #endif
 
-#ifdef CONFIG_MACH_SDM845_JUDYPN
-static u8  normal_harmonic_comp_left[4] =   {0x78, 0x00, 0x90, 0xfc};
-static u8  normal_harmonic_comp_right[4] =  {0x3d, 0x00, 0xe0, 0xfc};
-static u8  advance_harmonic_comp_left[4] =  {0x53, 0x02, 0x46, 0x00};
-static u8  advance_harmonic_comp_right[4] = {0xfe, 0x01, 0x46, 0x00};
-static u8  aux_harmonic_comp_left[4] =      {0x8b, 0x01, 0xa7, 0xfe};
-static u8  aux_harmonic_comp_right[4] =     {0x4a, 0x01, 0xb6, 0xfe};
-#else /* original */
-static u8  normal_harmonic_comp_left[4] = {0x78, 0x00, 0x9a, 0xfc};
-static u8  normal_harmonic_comp_right[4] = {0x1e, 0x00, 0x12, 0xfd};
-static u8  advance_harmonic_comp_left[4] = {0xfe, 0x01, 0x32, 0x00};
-static u8  advance_harmonic_comp_right[4] = {0x9a, 0x01, 0x64, 0x00};
-static u8  aux_harmonic_comp_left[4] = {0x1b, 0x01, 0x0c, 0xfe};
-static u8  aux_harmonic_comp_right[4] = {0xd2, 0x00, 0x34, 0xfe};
-#endif /* CONFIG_MACH_SDM845_JUDYPN */
+static const uint32_t master_trim_tbl[] = {
+	0x7FFFFFFF, /* 0dB */
+	0x78D6FC9D, /* 0.5dB */
+	0x721482BF, /* 1dB */
+	0x6BB2D603, /* 1.5dB */
+	0x65AC8C2E, /* 2dB */
+	0x5FFC888F, /* 2.5dB */
+	0x5A9DF7AA, /* 3dB */
+	0x558C4B21, /* 3.5dB */
+	0x50C335D3, /* 4dB */
+	0x4C3EA838, /* 4.5dB */
+	0x47FACCEF, /* 5dB */
+	0x43F4057E, /* 5.5dB */
+	0x4026E73C, /* 6dB */
+	0x3C90386F, /* 6.5dB */
+	0x392CED8D, /* 7dB */
+	0x35FA26A9, /* 7.5dB */
+	0x32F52CFE, /* 8dB */
+	0x301B70A7, /* 8.5dB */
+	0x2D6A866F, /* 9dB */
+	0x2AE025C2, /* 9.5dB */
+	0x287A26C4, /* 10dB */
+	0x26368073, /* 10.5dB */
+	0x241346F5, /* 11dB */
+	0x220EA9F3, /* 11.5dB */
+	0x2026F30F, /* 12dB */
+	0x1E5A8471, /* 12.5dB */
+	0x1CA7D767, /* 13dB */
+	0x1B0D7B1B, /* 13.5dB */
+	0x198A1357, /* 14dB */
+	0x181C5761, /* 14.5dB */
+	0x16C310E3, /* 15dB */
+	0x157D1AE1, /* 15.5dB */
+	0x144960C5, /* 16dB */
+	0x1326DD70, /* 16.5dB */
+	0x12149A5F, /* 17dB */
+	0x1111AEDA, /* 17.5dB */
+	0x101D3F2D, /* 18dB */
+	0xF367BED, /* 18.5dB */
+	0xE5CA14C, /* 19dB */
+	0xD8EF66D, /* 19.5dB */
+	0xCCCCCCC, /* 20dB */
+	0xC157FA9, /* 20.5dB */
+	0xB687379, /* 21dB */
+	0xAC51566, /* 21.5dB */
+	0xA2ADAD1, /* 22dB */
+	0x99940DB, /* 22.5dB */
+	0x90FCBF7, /* 23dB */
+	0x88E0783, /* 23.5dB */
+	0x8138561, /* 24dB */
+	0x79FDD9F, /* 24.5dB */
+	0x732AE17, /* 25dB */
+	0x6CB9A26, /* 25.5dB */
+	0x66A4A52, /* 26dB */
+	0x60E6C0B, /* 26.5dB */
+	0x5B7B15A, /* 27dB */
+	0x565D0AA, /* 27.5dB */
+	0x518847F, /* 28dB */
+	0x4CF8B43, /* 28.5dB */
+	0x48AA70B, /* 29dB */
+	0x4499D60, /* 29.5dB */
+	0x40C3713, /* 30dB */
+	0x3D2400B, /* 30.5dB */
+	0x39B8718, /* 31dB */
+	0x367DDCB, /* 31.5dB */
+	0x337184E, /* 32dB */
+	0x3090D3E, /* 32.5dB */
+	0x2DD958A, /* 33dB */
+	0x2B48C4F, /* 33.5dB */
+	0x28DCEBB, /* 34dB */
+	0x2693BF0, /* 34.5dB */
+	0x246B4E3, /* 35dB */
+	0x2261C49, /* 35.5dB */
+	0x207567A, /* 36dB */
+	0x1EA4958, /* 36.5dB */
+	0x1CEDC3C, /* 37dB */
+	0x1B4F7E2, /* 37.5dB */
+	0x19C8651, /* 38dB */
+	0x18572CA, /* 38.5dB */
+	0x16FA9BA, /* 39dB */
+	0x15B18A4, /* 39.5dB */
+	0x147AE14, /* 40dB */
+};
 
-enum {
-    ESS_MODE_INIT,   // only for common register values before each mode init.
-    ESS_MODE_PCM,    // PCM mode
-    ESS_MODE_DoP,    // DoP64, DoP128 mode
+static uint8_t normal_harmonic_comp_left[4] = { 0x78, 0x00, 0x9a, 0xfc };
+static uint8_t normal_harmonic_comp_right[4] = { 0x1e, 0x00, 0x12, 0xfd };
+
+static const char *power_state[] = {
+	"CLOSE", "OPEN", "BYPASS", "HIFI", "IDLE", "ACTIVE",
 };
 
 static int prev_dop_flag = 0;
-static int call_common_init_registers = 0;
 
-#ifdef ES9219C
-static unsigned int clk_source = 0; // 0: X-tal( 45.1584MHz), 1: MCLK : 19.2MHz, 3: BCLK
-static unsigned int pll_setting = 0;
-#define ES9219C_SLAVE_ADDR_1	0x48 // Main
-#define ES9219C_SLAVE_ADDR_2	0x4A // Sub , Register #192 ~ #201
-
-#define DRE_ENABLE
-#ifdef DRE_ENABLE
-static int es9219c_DRE_setting( void );
-static u8  normal_DRE_gain_left[2] = {0xed, 0x15}; //ESS_0103
-static u8  normal_DRE_gain_right[2] = {0xe5, 0x15}; //ESS_0103
-static u8  normal_DRE_on_threshold[2] = {0x50, 0x1c};//1121
-static u8  normal_DRE_off_threshold[2] = {0xb9, 0x51};//1121
-static u8  normal_DRE_decay_rate = 0x0a;
-
-static u8  advance_DRE_gain_left[2] = {0x73, 0x53}; //ESS_0103
-static u8  advance_DRE_gain_right[2] = {0x5f, 0x53}; //ESS_0103
-static u8  advance_DRE_on_threshold[2] = {0xf5, 0x28};
-static u8  advance_DRE_off_threshold[2] = {0xf5, 0x2d};
-static u8  advance_DRE_decay_rate = 0x0a;
-
-static u8  aux_DRE_gain_left[2] = {0x41, 0x53}; //ESS_0103
-static u8  aux_DRE_gain_right[2] = {0x4f, 0x53}; //ESS_0103
-static u8  aux_DRE_on_threshold[2] = {0xf5, 0x28};
-static u8  aux_DRE_off_threshold[2] = {0xf5, 0x2d};
-static u8  aux_DRE_decay_rate = 0x0a;
-#endif// DRE_ENABLE
-
-//#define X_TALK_ENHANCEMENT_ENABLE //1121
-#ifdef X_TALK_ENHANCEMENT_ENABLE
-static int es9219c_crosstalk_enhancement( void );
-static u8  crosstalk_scale_ch1[2] = {0x03, 0x0d};
-static u8  crosstalk_scale_ch2[2] = {0x03, 0x0d};
-#endif // X_TALK_ENHANCEMENT_ENABLE
-
-#endif// ES9219C
-
-bool g_ess_rev_check = false;
-
-enum {
-    ESS_A = 1,
-    ESS_B = 2,
-};
-int g_ess_rev = ESS_B;
-
-
-#define ES9218_RATES (SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_11025 |  \
-        SNDRV_PCM_RATE_16000 | SNDRV_PCM_RATE_22050 |   \
-        SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_48000 |   \
-        SNDRV_PCM_RATE_96000 | SNDRV_PCM_RATE_192000 | SNDRV_PCM_RATE_176400 | SNDRV_PCM_RATE_384000 ) //|SNDRV_PCM_RATE_352800  TODO for dop128
-
-#define ES9218_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S16_BE | \
-        SNDRV_PCM_FMTBIT_S20_3LE | SNDRV_PCM_FMTBIT_S20_3BE | \
-        SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S24_BE | \
-        SNDRV_PCM_FMTBIT_S32_LE | SNDRV_PCM_FMTBIT_S32_BE)
-
-
-#ifdef ES9218P_SYSFS
-struct es9218_regmap {
-    const char *name;
-    uint8_t reg;
-    int writeable;
-} es9218_regs[] = {
-    { "00_REGISTER",                       ES9218P_REG_00, 1 }, //00_SYSTEM_REGISTERS
-    { "01_REGISTER",                       ES9218P_REG_01, 1 }, //01_INPUT_SELECTION
-    { "02_REGISTER",                       ES9218P_REG_02, 1 }, //02_MIXING_AUTOMUTE_CONFIGURATION
-    { "03_REGISTER",                       ES9218P_REG_03, 1 }, //03_ANALOG_VOLUME_CONTROL
-    { "04_REGISTER",                       ES9218P_REG_04, 1 }, //04_AUTOMUTE_TIME
-    { "05_REGISTER",                       ES9218P_REG_05, 1 }, //05_AUTOMUTE_LEVEL
-    { "06_REGISTER",                       ES9218P_REG_06, 1 }, //06_DoP_VOLUME_RAMP_RATE
-    { "07_REGISTER",                       ES9218P_REG_07, 1 }, //07_FIILTER_BANDWIDTH_SYSTEM_MUTE
-    { "08_REGISTER",                       ES9218P_REG_08, 1 }, //08_GPIO1_2_CONFIGURATION
-    { "09_REGISTER",                       ES9218P_REG_09, 1 }, //09_RESERVED_09
-    { "10_REGISTER",                       ES9218P_REG_10, 1 }, //10_MASTER_MODE_SYNC_CONFIGURATION
-    { "11_REGISTER",                       ES9218P_REG_11, 1 }, //11_OVERCURRENT_PROTECTION
-    { "12_REGISTER",                       ES9218P_REG_12, 1 }, //12_ASRC_DPLL_BANDWIDTH
-    { "13_REGISTER",                       ES9218P_REG_13, 1 }, //13_THD_COMPENSATION_BYPASS
-    { "14_REGISTER",                       ES9218P_REG_14, 1 }, //14_SOFT_START_CONFIGURATION
-    { "15_REGISTER",                       ES9218P_REG_15, 1 }, //15_VOLUME_CONTROL_1
-    { "16_REGISTER",                       ES9218P_REG_16, 1 }, //16_VOLUME_CONTROL_2
-    { "17_REGISTER",                       ES9218P_REG_17, 1 }, //17_MASTER_TRIM_3
-    { "18_REGISTER",                       ES9218P_REG_18, 1 }, //18_MASTER_TRIM_2
-    { "19_REGISTER",                       ES9218P_REG_19, 1 }, //19_MASTER_TRIM_1
-    { "20_REGISTER",                       ES9218P_REG_20, 1 }, //20_MASTER_TRIM_0
-    { "21_REGISTER",                       ES9218P_REG_21, 1 }, //21_GPIO_INPUT_SELECTION
-    { "22_REGISTER",                       ES9218P_REG_22, 1 }, //22_THD_COMPENSATION_C2_2
-    { "23_REGISTER",                       ES9218P_REG_23, 1 }, //23_THD_COMPENSATION_C2_1
-    { "24_REGISTER",                       ES9218P_REG_24, 1 }, //24_THD_COMPENSATION_C3_2
-    { "25_REGISTER",                       ES9218P_REG_25, 1 }, //25_THD_COMPENSATION_C3_1
-    { "26_REGISTER",                       ES9218P_REG_26, 1 }, //26_CHARGE_PUMP_SOFT_START_DELAY
-    { "27_REGISTER",                       ES9218P_REG_27, 1 }, //27_GENERAL_CONFIGURATION
-    { "28_REGISTER",                       ES9218P_REG_28, 1 }, //28_RESERVED
-    { "29_REGISTER",                       ES9218P_REG_29, 1 }, //29_GIO_INVERSION_AUTO_CLOCK_GEAR
-    { "30_REGISTER",                       ES9218P_REG_30, 1 }, //30_CHARGE_PUMP_CLOCK_2
-    { "31_REGISTER",                       ES9218P_REG_31, 1 }, //31_CHARGE_PUMP_CLOCK_1
-    { "32_REGISTER",                       ES9218P_REG_32, 1 }, //32_AMPLIFIER_CONFIGURATION
-    { "33_REGISTER",                       ES9218P_REG_33, 1 }, //33_RESERVED
-    { "34_REGISTER",                       ES9218P_REG_34, 1 }, //34_PROGRAMMABLE_NCO_4
-    { "35_REGISTER",                       ES9218P_REG_35, 1 }, //35_PROGRAMMABLE_NCO_3
-    { "36_REGISTER",                       ES9218P_REG_36, 1 }, //36_PROGRAMMABLE_NCO_2
-    { "37_REGISTER",                       ES9218P_REG_37, 1 }, //37_PROGRAMMABLE_NCO_1
-    { "38_REGISTER",                       ES9218P_REG_38, 1 }, //38_RESERVED_38
-    { "39_REGISTER",                       ES9218P_REG_39, 1 }, //39_RESERVED_39
-    { "40_REGISTER",                       ES9218P_REG_40, 1 }, //40_PROGRAMMABLE_FIR_RAM_ADDRESS
-    { "41_REGISTER",                       ES9218P_REG_41, 1 }, //41_PROGRAMMABLE_FIR_RAM_DATA_3
-    { "42_REGISTER",                       ES9218P_REG_42, 1 }, //42_PROGRAMMABLE_FIR_RAM_DATA_2
-    { "43_REGISTER",                       ES9218P_REG_43, 1 }, //43_PROGRAMMABLE_FIR_RAM_DATA_1
-    { "44_REGISTER",                       ES9218P_REG_44, 1 }, //44_PROGRAMMABLE_FIR_CONFIGURATION
-    { "45_REGISTER",                       ES9218P_REG_45, 1 }, //45_ANALOG_CONTROL_OVERRIDE
-    { "46_REGISTER",                       ES9218P_REG_46, 1 }, //46_DIGITAL_OVERRIDE
-    { "47_REGISTER",                       ES9218P_REG_47, 1 }, //47_RESERVED
-    { "48_REGISTER",                       ES9218P_REG_48, 1 }, //48_SEPERATE_CH_THD
-    { "49_REGISTER",                       ES9218P_REG_49, 1 }, //49_AUTOMATIC_CLOCK_GEARING_THRESHOLDS_3
-    { "50_REGISTER",                       ES9218P_REG_50, 1 }, //50_AUTOMATIC_CLOCK_GEARING_THRESHOLDS_2
-    { "51_REGISTER",                       ES9218P_REG_51, 1 }, //51_AUTOMATIC_CLOCK_GEARING_THRESHOLDS_1
-    { "52_REGISTER",                       ES9218P_REG_52, 1 }, //52_RESERVED
-    { "53_REGISTER",                       ES9218P_REG_53, 1 }, //53_THD_COMPENSATION_C2_2
-    { "54_REGISTER",                       ES9218P_REG_54, 1 }, //54_THD_COMPENSATION_C2_1
-    { "55_REGISTER",                       ES9218P_REG_55, 1 }, //55_THD_COMPENSATION_C3_2
-    { "56_REGISTER",                       ES9218P_REG_56, 1 }, //56_THD_COMPENSATION_C3_1
-    { "57_REGISTER",                       ES9218P_REG_57, 1 }, //57_RESERVED
-    { "58_REGISTER",                       ES9218P_REG_58, 1 }, //58_RESERVED
-    { "59_REGISTER",                       ES9218P_REG_59, 1 }, //59_RESERVED
-    { "60_REGISTER",                       ES9218P_REG_60, 1 }, //60_DAC_ANALOG_TRIM_CONTROL
-    { "64_REGISTER",                       ES9218P_REG_64, 0 }, //64_CHIP_STATUS
-    { "65_REGISTER",                       ES9218P_REG_65, 0 }, //65_GPIO_READBACK
-    { "66_REGISTER",                       ES9218P_REG_66, 0 }, //66_DPLL_NUMBER_4
-    { "67_REGISTER",                       ES9218P_REG_67, 0 }, //67_DPLL_NUMBER_3
-    { "68_REGISTER",                       ES9218P_REG_68, 0 }, //68_DPLL_NUMBER_2
-    { "69_REGISTER",                       ES9218P_REG_69, 0 }, //69_DPLL_NUMBER_1
-    { "70_REGISTER",                       ES9218P_REG_70, 0 }, //70_RESERVED
-    { "71_REGISTER",                       ES9218P_REG_71, 0 }, //71_RESERVED
-    { "72_REGISTER",                       ES9218P_REG_72, 0 }, //72_INPUT_SELECTION_AND_AUTOMUTE_STATUS
-    { "73_REGISTER",                       ES9218P_REG_73, 0 }, //73_RAM_COEFFEICIENT_READBACK_3
-    { "74_REGISTER",                       ES9218P_REG_74, 0 }, //74_RAM_COEFFEICIENT_READBACK_2
-    { "75_REGISTER",                       ES9218P_REG_75, 0 }, //75_RAM_COEFFEICIENT_READBACK_1
-#ifdef ES9219C
-    { "135_REGISTER",                      ES9219C_REG_135, 1 }, //135_ANALOG_CONTROL_OVERIDES
-    { "136_REGISTER",                      ES9219C_REG_136, 1 }, //136_DRE_CONFIG
-    { "137_REGISTER",                      ES9219C_REG_137, 1 }, //137_DRE_GAIN_CH1
-    { "138_REGISTER",                      ES9219C_REG_138, 1 }, //138_DRE_GAIN_CH1
-    { "139_REGISTER",                      ES9219C_REG_139, 1 }, //139_DRE_GAIN_CH2
-    { "140_REGISTER",                      ES9219C_REG_140, 1 }, //140_DRE_GAIN_CH2
-    { "141_REGISTER",                      ES9219C_REG_141, 1 }, //141_DRE_ON_THRESHOLD
-    { "142_REGISTER",                      ES9219C_REG_142, 1 }, //142_DRE_ON_THRESHOLD
-    { "143_REGISTER",                      ES9219C_REG_143, 1 }, //143_DRE_OFF_THRESHOLD
-    { "144_REGISTER",                      ES9219C_REG_144, 1 }, //144_DRE_OFF_THRESHOLD
-    { "145_REGISTER",                      ES9219C_REG_145, 1 }, //145_DRE_DECAY_RATE
-    { "192_REGISTER",                      ES9219C_REG_192, 1 }, //192_SOFT_RESET
-    { "193_REGISTER",                      ES9219C_REG_193, 1 }, //193_PLL_CONFIG1
-    { "194_REGISTER",                      ES9219C_REG_194, 1 }, //194_PLL_CONFIG2
-    { "195_REGISTER",                      ES9219C_REG_195, 1 }, //195_PLL_CONFIG2
-    { "196_REGISTER",                      ES9219C_REG_196, 1 }, //196_PLL_CONFIG2
-    { "197_REGISTER",                      ES9219C_REG_197, 1 }, //197_PLL_CONFIG2
-    { "198_REGISTER",                      ES9219C_REG_198, 1 }, //198_PLL_CONFIG3
-    { "199_REGISTER",                      ES9219C_REG_199, 1 }, //199_PLL_CONFIG3
-    { "200_REGISTER",                      ES9219C_REG_200, 1 }, //200_PLL_CONFIG4
-    { "201_REGISTER",                      ES9219C_REG_201, 1 }, //201_PLL_CONFIG5
-#endif
-};
+#if ES9218P_SYSFS == 1
 #ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
 static ssize_t get_fade_term_param(struct device *dev,
-	                    struct device_attribute *attr, char *buf)
+				   struct device_attribute *attr, char *buf)
 {
-
 	unsigned val = 1;
-	sprintf(buf, "%s : current fade term %d   ",__func__, get_fade_term_define());
-	pr_info("%s() : fade_term_define = %d, val %d", __func__, get_fade_term_define(), val);
 
-        return val;
+	sprintf(buf, "%s : current fade term %d   ", __func__,
+		lge_ess_get_fade_term());
+	pr_info("%s() : fade_term_define = %d, val %d", __func__,
+		lge_ess_get_fade_term(), val);
+
+	return val;
 }
 
-
 static ssize_t set_fade_term_param(struct device *dev,
-			 struct device_attribute *attr,
-			 const char *buf, size_t count)
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
 {
-
 	int value;
 	unsigned val = count;
+
 	sscanf(buf, "%d", &value);
 	fade_term_debug_param = value;
 
-	pr_info("%s() : new mute term = %d", __func__, get_fade_term_define());
-	return val;
+	pr_info("%s() : new mute term = %d", __func__, lge_ess_get_fade_term());
 
+	return val;
 }
 
 static ssize_t get_fade_mute_param(struct device *dev,
-	                    struct device_attribute *attr, char *buf)
+				   struct device_attribute *attr, char *buf)
 {
-
 	unsigned val = 1;
-	sprintf(buf, "%s : current fade count %d   ",__func__, get_fade_count_define());
-	pr_info("%s() : fade_count_define = %d, val %d", __func__, get_fade_count_define(), val);
 
-        return val;
+	sprintf(buf, "%s : current fade count %d   ", __func__,
+		lge_ess_get_fade_count());
+	pr_info("%s() : fade_count_define = %d, val %d", __func__,
+		lge_ess_get_fade_count(), val);
+
+	return val;
 }
 
-
 static ssize_t set_fade_mute_param(struct device *dev,
-			 struct device_attribute *attr,
-			 const char *buf, size_t count)
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
 {
-
 	int value;
 	unsigned val = count;
+
 	sscanf(buf, "%d", &value);
 	fade_count_debug_param = value;
 
-	pr_info("%s() : new mute count = %d", __func__, get_fade_count_define());
-	return val;
+	pr_info("%s() : new mute count = %d", __func__,
+		lge_ess_get_fade_count());
 
+	return val;
 }
 
-static DEVICE_ATTR(fade_mute_count, S_IWUSR | S_IRUGO, get_fade_mute_param, set_fade_mute_param);
-static DEVICE_ATTR(fade_mute_term, S_IWUSR | S_IRUGO, get_fade_term_param, set_fade_term_param);
+static DEVICE_ATTR(fade_mute_count, S_IWUSR | S_IRUGO, get_fade_mute_param,
+		   set_fade_mute_param);
+static DEVICE_ATTR(fade_mute_term, S_IWUSR | S_IRUGO, get_fade_term_param,
+		   set_fade_term_param);
 #endif
 
 static ssize_t es9218_registers_show(struct device *dev,
-                  struct device_attribute *attr, char *buf)
+				     struct device_attribute *attr, char *buf)
 {
-    unsigned i, n, reg_count;
-    u8 read_buf;
+	unsigned i, n, reg_count;
+	uint8_t read_buf;
 
-    reg_count = sizeof(es9218_regs) / sizeof(es9218_regs[0]);
-    for (i = 0, n = 0; i < reg_count; i++) {
-        read_buf = es9218_read_reg(g_es9218_priv->i2c_client, es9218_regs[i].reg);
-        n += scnprintf(buf + n, PAGE_SIZE - n,
-                   "%-15s <#%02d>= 0x%02X\n",
-                   es9218_regs[i].name, es9218_regs[i].reg,
-                   read_buf);
-    }
+	reg_count = sizeof(es9218p_regmap) / sizeof(es9218p_regmap[0]);
+	for (i = 0, n = 0; i < reg_count; i++) {
+		read_buf = es9218_read_reg(g_es9218_priv->i2c_client,
+					   es9218p_regmap[i].reg);
+		n += scnprintf(buf + n, PAGE_SIZE - n,
+			       "%-40s <#%02d>= 0x%02X\n",
+			       es9218p_regmap[i].name, es9218p_regmap[i].reg,
+			       read_buf);
+	}
 
-    return n;
+	return n;
 }
-
 static ssize_t es9218_registers_store(struct device *dev,
-                   struct device_attribute *attr,
-                   const char *buf, size_t count)
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
 {
-    unsigned i, reg_count, value;
-    int error = 0;
-    char name[45];
+	unsigned i, reg_count, value;
+	int error = 0;
+	char name[45];
 
-    if (count >= 45) {
-        pr_err("%s:input too long\n", __func__);
-        return -1;
-    }
+	if (count >= 45) {
+		pr_err("%s:input too long\n", __func__);
+		return -1;
+	}
 
-    if (sscanf(buf, "%40s %x", name, &value) != 2) {
-        pr_err("%s:unable to parse input\n", __func__);
-        return -1;
-    }
+	if (sscanf(buf, "%40s %x", name, &value) != 2) {
+		pr_err("%s:unable to parse input\n", __func__);
+		return -1;
+	}
 
-    pr_info("%s: %s %0xx",__func__,name,value);
-    reg_count = sizeof(es9218_regs) / sizeof(es9218_regs[0]);
-    for (i = 0; i < reg_count; i++) {
-        if (!strcmp(name, es9218_regs[i].name)) {
-            if (es9218_regs[i].writeable) {
-                error = es9218_write_reg(g_es9218_priv->i2c_client,
-                                            es9218_regs[i].reg, value);
-                if (error) {
-                    pr_err("%s:Failed to write %s\n", __func__, name);
-                    return -1;
-                }
-            }
-            else {
-                pr_err("%s:Register %s is not writeable\n", __func__, name);
-                return -1;
-            }
+	pr_info("%s: %s %0xx", __func__, name, value);
 
-            return count;
-        }
-    }
+	reg_count = sizeof(es9218p_regmap) / sizeof(es9218p_regmap[0]);
+	for (i = 0; i < reg_count; i++) {
+		if (!strcmp(name, es9218p_regmap[i].name)) {
+			if (es9218p_regmap[i].writeable) {
+				error = es9218_write_reg(
+					g_es9218_priv->i2c_client,
+					es9218p_regmap[i].reg, value);
 
-    pr_err("%s:no such register %s\n", __func__, name);
-    return -1;
+				if (error) {
+					pr_err("%s:Failed to write %s\n",
+					       __func__, name);
+
+					return -1;
+				}
+			} else {
+				pr_err("%s:Register %s is not writeable\n",
+				       __func__, name);
+
+				return -1;
+			}
+
+			return count;
+		}
+	}
+
+	pr_err("%s:no such register %s\n", __func__, name);
+
+	return -1;
 }
+static DEVICE_ATTR(registers, S_IWUSR | S_IRUGO, es9218_registers_show,
+		   es9218_registers_store);
 
-static DEVICE_ATTR(registers, S_IWUSR | S_IRUGO,
-        es9218_registers_show, es9218_registers_store);
-
-static ssize_t set_forced_headset_type(struct device *dev,
-                   struct device_attribute *attr,
-                   const char *buf, size_t count)
-{
-    int input_val; //0, 1, 2
-    sscanf(buf, "%d", &input_val);
-    es9218p_sabre_hifi2lpb();
-    g_volume = 0;
-
-    g_headset_type = input_val + 1;
-    forced_headset_type = input_val + 1;
-
-    es9218p_sabre_bypass2hifi();
-
-    return count;
-}
 static ssize_t get_forced_headset_type(struct device *dev,
-                   struct device_attribute *attr,
-                   char *buf)
+				       struct device_attribute *attr, char *buf)
 {
-    return sprintf(buf, "%i\n", g_headset_type);
+	return sprintf(buf, "%i\n", g_headset_type);
 }
-static DEVICE_ATTR(headset_type, S_IWUSR|S_IRUGO, get_forced_headset_type, set_forced_headset_type);
-
-static ssize_t set_forced_avc_volume(struct device *dev,
-                   struct device_attribute *attr,
-                   const char *buf, size_t count)
+static ssize_t set_forced_headset_type(struct device *dev,
+				       struct device_attribute *attr,
+				       const char *buf, size_t count)
 {
-    int input_vol;
-    sscanf(buf, "%d", &input_vol);
+	int input_val;
 
-    if (input_vol >= sizeof(avc_vol_tbl)/sizeof(avc_vol_tbl[0])) {
-        pr_err("%s() : Invalid vol = %d return \n", __func__, input_vol);
-        return 0;
-    }
+	sscanf(buf, "%d", &input_val);
+	es9218p_sabre_hifi2lpb();
+	g_volume = 0;
 
-    g_avc_volume = input_vol;
-    forced_avc_volume = input_vol;
+	g_headset_type = input_val + 1;
+	forced_headset_type = input_val + 1;
 
-    es9218_set_avc_volume(g_es9218_priv->i2c_client, g_avc_volume);
+	es9218p_sabre_bypass2hifi();
 
-    return count;
+	return count;
 }
+static DEVICE_ATTR(headset_type, S_IWUSR | S_IRUGO, get_forced_headset_type,
+		   set_forced_headset_type);
 
 static ssize_t get_forced_avc_volume(struct device *dev,
-                   struct device_attribute *attr,
-                   char *buf)
+				     struct device_attribute *attr, char *buf)
 {
-    return sprintf(buf, "%i\n", g_avc_volume);
+	return sprintf(buf, "%i\n", g_avc_volume);
 }
-static DEVICE_ATTR(avc_volume, S_IWUSR|S_IRUGO, get_forced_avc_volume, set_forced_avc_volume);
+static ssize_t set_forced_avc_volume(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count)
+{
+	int input_vol;
+	sscanf(buf, "%d", &input_vol);
+
+	if (input_vol >= sizeof(avc_vol_tbl) / sizeof(avc_vol_tbl[0])) {
+		pr_err("%s() : Invalid vol = %d return \n", __func__,
+		       input_vol);
+
+		return 0;
+	}
+
+	g_avc_volume = input_vol;
+	forced_avc_volume = input_vol;
+
+	es9218_set_avc_volume(g_es9218_priv->i2c_client, g_avc_volume);
+
+	return count;
+}
+static DEVICE_ATTR(avc_volume, S_IWUSR | S_IRUGO, get_forced_avc_volume,
+		   set_forced_avc_volume);
 
 static struct attribute *es9218_attrs[] = {
 #ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
-	&dev_attr_fade_mute_count.attr,
-	&dev_attr_fade_mute_term.attr,
+	&dev_attr_fade_mute_count.attr, &dev_attr_fade_mute_term.attr,
 #endif
-    &dev_attr_registers.attr,
-    &dev_attr_headset_type.attr,
-    &dev_attr_avc_volume.attr,
-    NULL
+	&dev_attr_registers.attr,	&dev_attr_headset_type.attr,
+	&dev_attr_avc_volume.attr,	NULL,
 };
 
 static const struct attribute_group es9218_attr_group = {
-    .attrs = es9218_attrs,
+	.attrs = es9218_attrs,
 };
+#endif /* ES9218P_SYSFS */
 
-#endif /* ES9218P_SYSFS*/
-
-#ifdef ES9218P_NCO
-/*******************************************************************************//**
- Enable NCO mode by sampling freq.
- \param[in]	iFSR	: Smpling freq. of audio stream such as 44100 or 48000.
- \param[in]	iMCLK  	: It is Xin/n value. Xin will be 50MHz and 'n' can be '1/2/4/8'.
- \param[in]	iMODE  	: Set NCO enable/disable
-
- \return	int
- \retval	0	Success
- \retval	-1	Failure
-
- \b Note:   Register 34-37 : Programmable NCO(0x22 - 025)
-            We can calculate "nco_num = iFSR*(2^32)/iMCLK".
-
-***********************************************************************************/
+#if ES9218P_NCO == 1
+/**
+ * es9218p_sabre_set_nco_num() - Enable NCO mode by sampling frequency.
+ * @iFSR: The sampling frequency of the audio stream.
+ * @iMCLK : The Xin/n value. Xin will be 50MHz and 'n' can be '1/2/4/8'.
+ * @iMODE : Enable or disable NCO.
+ *
+ * Return: Describe the return value of function_name.
+ * * 0             - Success
+ * * -1            - Faliure
+ */
 static int es9218p_sabre_set_nco_num(int iFSR, int iMCLK, int iMODE)
 {
 	uint32_t nco_num;
 	int ret = 0;
 	int i;
 
-	if ( es9218_power_state < ESS_PS_HIFI ) {
-		pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
+
 		return -1;
 	}
-	pr_info("%s() : state = %s\n", __func__, power_state[es9218_power_state]);
-	nco_num = (iFSR*0x100000000)/iMCLK;
-	pr_info("%s nco_num:%x\n",__func__, nco_num);
+
+	pr_info("%s() : state = %s\n", __func__,
+		power_state[es9218_power_state]);
+
+	nco_num = (iFSR * 0x100000000) / iMCLK;
+	pr_info("%s nco_num:%x\n", __func__, nco_num);
 
 	for (i = 0; i < 4; i++) {
-		if(iMODE)
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, es9218_regs[i+34].reg, (nco_num & 0xff));
+		if (iMODE)
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       es9218p_regmap[i + 34].reg,
+					       (nco_num & 0xff));
 		else
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, es9218_regs[i+34].reg, 0x00);
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       es9218p_regmap[i + 34].reg,
+					       0x00);
 
 		if (ret < 0) {
-			pr_err("%s:Failed to write %s\n", __func__, es9218_regs[i+34].name);
+			pr_err("%s:Failed to write %s\n", __func__,
+			       es9218p_regmap[i + 34].name);
 			return -1;
 		}
+
 		nco_num = (nco_num >> 8);
 	}
 
@@ -886,3673 +863,3211 @@ static int es9218p_sabre_set_nco_num(int iFSR, int iMCLK, int iMODE)
 }
 #endif /* ES9218P_NCO */
 
-
 /*
- *      ES9812P's Power state / mode control signals
- *      reset_gpio;         //HIFI_RESET_N
- *      power_gpio;         //HIFI_LDO_SW
- *      hph_switch_gpio;    //HIFI_MODE2
- *      reset_gpio=H && hph_switch_gpio=L   --> HiFi mode
- *      reset_gpio=L && hph_switch_gpio=H   --> Low Power Bypass mode
- *      reset_gpio=L && hph_switch_gpio=L   --> Standby mode(Shutdown mode)
- *      reset_gpio=H && hph_switch_gpio=H   --> LowFi mode
+ * The ES9812P has multiple power states. These are controlled by the variables
+ * in the es9218_data structure:
+ *
+ * reset_gpio      -> This represents the HIFI_RESET_N signal.
+ * power_gpio      -> This represents the HIFI_LDO_SW signal.
+ * hph_switch_gpio -> This represents the HIFI_MODE2 signal.
+ *
+ * The states are set as follows:
+ *
+ * reset_gpio=H && hph_switch_gpio=L -> HiFi State
+ * reset_gpio=L && hph_switch_gpio=H -> Low Power Bypass (LPB) State
+ * reset_gpio=L && hph_switch_gpio=L -> Standby State
+ * reset_gpio=H && hph_switch_gpio=H -> LoFi State
  */
-
 
 static void es9218_power_gpio_H(void)
 {
-    gpio_set_value(g_es9218_priv->es9218_data->power_gpio, 1);
-    pr_info("%s(): pa_gpio_level = %d\n", __func__, __gpio_get_value(g_es9218_priv->es9218_data->power_gpio));
+	gpio_set_value(g_es9218_priv->es9218_data->power_gpio, 1);
+
+	pr_info("%s(): pa_gpio_level = %d\n", __func__,
+		__gpio_get_value(g_es9218_priv->es9218_data->power_gpio));
 }
 
 static void es9218_power_gpio_L(void)
 {
-    gpio_set_value(g_es9218_priv->es9218_data->power_gpio, 0);
-    pr_info("%s(): pa_gpio_level = %d\n", __func__, __gpio_get_value(g_es9218_priv->es9218_data->power_gpio));
-}
+	gpio_set_value(g_es9218_priv->es9218_data->power_gpio, 0);
 
-#ifdef CONFIG_SND_USE_MBHC_EXTN_CABLE
-int es9218_mode_get(void) {
-	pr_info("%s(): hifi power state [%d]\n", __func__, es9218_power_state);
-	return es9218_power_state;
+	pr_info("%s(): pa_gpio_level = %d\n", __func__,
+		__gpio_get_value(g_es9218_priv->es9218_data->power_gpio));
 }
-EXPORT_SYMBOL(es9218_mode_get);
-#endif
-
-#ifdef CONFIG_SND_SOC_HSDET_L_SWITCH
-int es9218_hifi_exception_state_get(void) {
-	pr_info("%s(): hifi exception [%d]\n", __func__, es9218_power_state);
-	if(es9218_power_state != ESS_PS_BYPASS)
-		g_es9218_priv->es9218_data->ess_hifi_exception = true;
-	return es9218_power_state;
-}
-EXPORT_SYMBOL(es9218_hifi_exception_state_get);
-void es9218_hifi_exception_state_put(void) {
-	g_es9218_priv->es9218_data->ess_hifi_exception = false;
-}
-EXPORT_SYMBOL(es9218_hifi_exception_state_put);
-
-void es9218_headset_state(int detection) {
-	pr_info("%s(): headset_state = %d, detection = %d [1:Insertion 0: Removal]\n", __func__, g_es9218_priv->es9218_data->headset_state, detection);
-	g_es9218_priv->es9218_data->headset_state = detection;
-}
-EXPORT_SYMBOL(es9218_headset_state);
-
-void es9218_hsdet_l_switch_gpio_H(void)
-{
-    if(g_es9218_priv->es9218_data->switch_gpio >= 0) {
-        gpio_set_value(g_es9218_priv->es9218_data->switch_gpio, 1);
-        pr_info("%s(): hsdet_l_switch = %d\n", __func__, __gpio_get_value(g_es9218_priv->es9218_data->switch_gpio));
-    } else {
-        pr_info("%s(): No hsdet_l_switch.\n", __func__);
-    }
-}
-
-void es9218_hsdet_l_switch_gpio_L(void)
-{
-	if(g_es9218_priv->es9218_data->switch_gpio >= 0) {
-        gpio_set_value(g_es9218_priv->es9218_data->switch_gpio, 0);
-        pr_info("%s(): hsdet_l_switch = %d\n", __func__, __gpio_get_value(g_es9218_priv->es9218_data->switch_gpio));
-    } else {
-        pr_info("%s(): No hsdet_l_switch.\n", __func__);
-    }
-}
-EXPORT_SYMBOL(es9218_hsdet_l_switch_gpio_L);
-#endif
 
 static void es9218_reset_gpio_H(void)
 {
-#ifdef USE_CONTROL_EXTERNAL_LDO_FOR_DVDD
-    int ret;
-    ret = regulator_enable(g_es9218_priv->es9218_data->vreg_dvdd);
-    pr_info("%s(): turn on an external LDO connected to DVDD.[rc=%d]\n", __func__, ret);
-    msleep(1);
+#if USE_CONTROL_EXTERNAL_LDO_FOR_DVDD == 1
+	int ret = regulator_enable(g_es9218_priv->es9218_data->vreg_dvdd);
+
+	pr_info("%s(): turn on an external LDO connected to DVDD.[rc=%d]\n",
+		__func__, ret);
+
+	msleep(1);
 #endif
 
-    gpio_set_value(g_es9218_priv->es9218_data->reset_gpio, 1);
+	gpio_set_value(g_es9218_priv->es9218_data->reset_gpio, 1);
 
-    pr_info("%s(): pa_gpio_level = %d\n", __func__, __gpio_get_value(g_es9218_priv->es9218_data->reset_gpio));
-
-#ifdef CONFIG_SND_SOC_HSDET_L_SWITCH
-    if(g_es9218_priv->es9218_data->headset_state) {
-        mdelay(1);
-        es9218_hsdet_l_switch_gpio_H();
-    } else {
-        pr_info("%s: Headset removal status. So, don't set to high switch pin.[%d]\n", __func__, g_es9218_priv->es9218_data->headset_state);
-    }
-#endif
+	pr_info("%s(): pa_gpio_level = %d\n", __func__,
+		__gpio_get_value(g_es9218_priv->es9218_data->reset_gpio));
 }
 
 static void es9218_reset_gpio_L(void)
 {
-#ifdef USE_CONTROL_EXTERNAL_LDO_FOR_DVDD
-    int ret;
+#if USE_CONTROL_EXTERNAL_LDO_FOR_DVDD == 1
+	int ret;
 #endif
 
-#ifdef CONFIG_SND_SOC_HSDET_L_SWITCH
-    es9218_hsdet_l_switch_gpio_L();
-    mdelay(1);
-#endif
-    gpio_set_value(g_es9218_priv->es9218_data->reset_gpio, 0);
+	gpio_set_value(g_es9218_priv->es9218_data->reset_gpio, 0);
 
-    pr_info("%s(): pa_gpio_level = %d\n", __func__, __gpio_get_value(g_es9218_priv->es9218_data->reset_gpio));
-#ifdef USE_CONTROL_EXTERNAL_LDO_FOR_DVDD
-    msleep(1);
-    ret = regulator_disable(g_es9218_priv->es9218_data->vreg_dvdd);
-    pr_info("%s(): turn off an external LDO connected to DVDD.[rc=%d]\n", __func__, ret);
+	pr_info("%s(): pa_gpio_level = %d\n", __func__,
+		__gpio_get_value(g_es9218_priv->es9218_data->reset_gpio));
+
+#if USE_CONTROL_EXTERNAL_LDO_FOR_DVDD == 1
+	msleep(1);
+
+	ret = regulator_disable(g_es9218_priv->es9218_data->vreg_dvdd);
+	pr_info("%s(): turn off an external LDO connected to DVDD.[rc=%d]\n",
+		__func__, ret);
 #endif
 }
 
 static void es9218_hph_switch_gpio_H(void)
 {
-    gpio_set_value(g_es9218_priv->es9218_data->hph_switch, 1);
-    pr_info("%s(): hph_switch = %d\n", __func__, __gpio_get_value(g_es9218_priv->es9218_data->hph_switch));
+	gpio_set_value(g_es9218_priv->es9218_data->hph_switch, 1);
+	pr_info("%s(): hph_switch = %d\n", __func__,
+		__gpio_get_value(g_es9218_priv->es9218_data->hph_switch));
 }
 
 static void es9218_hph_switch_gpio_L(void)
 {
-    gpio_set_value(g_es9218_priv->es9218_data->hph_switch, 0);
-    pr_info("%s(): hph_switch = %d\n", __func__, __gpio_get_value(g_es9218_priv->es9218_data->hph_switch));
+	gpio_set_value(g_es9218_priv->es9218_data->hph_switch, 0);
+	pr_info("%s(): hph_switch = %d\n", __func__,
+		__gpio_get_value(g_es9218_priv->es9218_data->hph_switch));
 }
-
-#ifdef ES9219C
-static int es9219c_sabre_pll_setting( unsigned int pll_setting ){
-	//I2C Addr : 0x94
-	int ret = 0;
-	switch (pll_setting)
-		{
-
-		/* BLCK PLL SYNC MODE : Reg #194 ~ Reg #198 */
-		case 1: // BCLK : 44.1K/48K 32bit (352.8k / 384K )
-			//I2C Addr : 0x94
-		   // HERE PLL setting from Reg #194 ~ Reg #198
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x81);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x02);
-			break;
-
-		case 2: // BCLK : 44.1K/48K 32bit (176.4K / 192K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x41);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x04);
-			break;
-
-		case 3: // BCLK : 44.1K/48K 32bit (88.2K / 96K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x80);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x40);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x08);
-			break;
-
-		case 4: // BCLK : 44.1K/48K 32bit (44.1K / 48K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x80);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x20);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x08);
-			break;
-
-		case 5: // BCLK : 44.1K/48K 24bit (352.8k / 384K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x61);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x02);
-			break;
-
-		case 6: // BCLK : 44.1K/48K 24bit (176.4K / 192K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x31);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x04);
-			break;
-
-		case 7: // BCLK : 44.1K/48K 24bit (88.2K / 96K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x80);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x30);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x08);
-			break;
-
-		case 8: // BCLK : 44.1K/48K 24bit (44.1K / 48K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x40);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x30);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x08);
-			break;
-
-		case 9: // BCLK : 44.1K/48K 16bit (352.8k / 384K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x41);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x02);
-			break;
-
-		case 10: // BCLK : 44.1K/48K 16bit (176.4K / 192K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x21);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x04);
-			break;
-
-		case 11: // BCLK : 44.1K/48K 16bit (88.2K / 96K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x80);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x20);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x08);
-			break;
-
-		case 12: // BCLK : 44.1K/48K 16bit (44.1K / 48K )
-			//I2C Addr : 0x94
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x40);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x20);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x08);
-			break;
-
-		   default :
-			   pr_err("%s() : Invalid PLL = %d \n", __func__, pll_setting);
-			   break;
-		}
-
-	return ret;
-}
-
-static int es9219c_sabre_clk_source_set(unsigned int clk_source, unsigned int pll_setting )
-{
-	int ret = 0 ;
-
-	if( clk_source < 2 ) {
-
-		if( clk_source == 1) { // MCLK : 19.2MHz
-		   //I2C Addr : 0x90
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_192, 0x00);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_200, 0x0C);
-
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_194, 0xD3);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_195, 0x88);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_196, 0x41);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_197, 0x00);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_198, 0x02);
-
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_199, 0xC4);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_201, 0x01);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_193, 0xCC);
-		   mdelay(1);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_201, 0x11);
-
-		}
-
-	}
-	else{
-		   //I2C Addr must be 0x94---from
-		   g_es9218_priv->i2c_client->addr = ES9219C_SLAVE_ADDR_2;
-
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_192, 0x00);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_200, 0x0C);
-
-		   // HERE PLL setting from Reg #194 ~ Reg #198
-		   es9219c_sabre_pll_setting(pll_setting);
-
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_199, 0xC4);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_201, 0x02);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_193, 0xCC);
-		   mdelay(1);
-		   ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_201, 0x12);
-
-		   g_es9218_priv->i2c_client->addr = ES9219C_SLAVE_ADDR_1;
-		   //I2C Addr must be 0x94---end
-	}
-
-    return ret;
-}
-
-#ifdef DRE_ENABLE
-static int es9219c_DRE_setting( void ){
-	int ret = 0;
-	int imp_load = g_headset_type;
-
-    pr_info("%s(): entry\n", __func__);
-
-	switch(imp_load)
-	{
-
-		case 1: // Normal
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_141, normal_DRE_on_threshold[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_142, normal_DRE_on_threshold[1]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_143, normal_DRE_off_threshold[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_144, normal_DRE_off_threshold[1]);
-
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_137, normal_DRE_gain_left[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_138, normal_DRE_gain_left[1]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_139, normal_DRE_gain_right[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_140, normal_DRE_gain_right[1]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_145, normal_DRE_decay_rate);
-			break;
-
-		case 2: // Advanced
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_141, advance_DRE_on_threshold[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_142, advance_DRE_on_threshold[1]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_143, advance_DRE_off_threshold[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_144, advance_DRE_off_threshold[1]);
-
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_137, advance_DRE_gain_left[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_138, advance_DRE_gain_left[1]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_139, advance_DRE_gain_right[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_140, advance_DRE_gain_right[1]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_145, advance_DRE_decay_rate);
-			break;
-
-
-		case 3: // AUX
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_141, aux_DRE_on_threshold[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_142, aux_DRE_on_threshold[1]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_143, aux_DRE_off_threshold[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_144, aux_DRE_off_threshold[1]);
-
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_137, aux_DRE_gain_left[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_138, aux_DRE_gain_left[1]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_139, aux_DRE_gain_right[0]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_140, aux_DRE_gain_right[1]);
-			ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_145, aux_DRE_decay_rate);
-			break;
-
-		default :
-		   pr_err("%s() : Invalid DRE set(heaset_type %d)  \n", __func__, g_headset_type);
-		   break;
-	}
-
-	if(ret == 0 )
-	{
-		ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_136, 0x11); //  DRE_enable, DRE_Vol CTRL
-		return ret;
-	}
-	else
-		return ret;
-
-}
-#endif /* DRE_ENABLE */
-
-#ifdef X_TALK_ENHANCEMENT_ENABLE //1121
-static int es9219c_crosstalk_enhancement( void )
-{
-	int ret = 0;
-
-	int imp_load = g_headset_type;
-
-	if (imp_load == 1)
-	{
-        ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_130, crosstalk_scale_ch1[0]);
-        ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_131, crosstalk_scale_ch1[1]);
-        ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_132, crosstalk_scale_ch2[0]);
-        ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_133, crosstalk_scale_ch2[1]);
-
-        ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_128, 0x04); // Crostalk_enable
-
-	}
-	return ret;
-}
-#endif // X_TALK_ENHANCEMENT_ENABLE
-
-#endif // ES9219c
 
 static int es9218_master_trim(struct i2c_client *client, int vol)
 {
-    int ret = 0;
-    u32 value;
+	int ret = 0;
+	uint32_t value;
 
-    if (vol >= sizeof(master_trim_tbl)/sizeof(master_trim_tbl[0])) {
-        pr_err("%s() : Invalid vol = %d return \n", __func__, vol);
-        return 0;
-    }
+	if (vol >= sizeof(master_trim_tbl) / sizeof(master_trim_tbl[0])) {
+		pr_err("%s() : Invalid vol = %d return \n", __func__, vol);
 
-    value = master_trim_tbl[vol];
-    pr_info("%s(): MasterTrim = %08X \n", __func__, value);
+		return 0;
+	}
 
-    if  (es9218_power_state == ESS_PS_IDLE) {
-        pr_err("%s() : Invalid vol = %d return \n", __func__, vol);
-        return 0;
-    }
+	value = master_trim_tbl[vol];
+	pr_info("%s(): MasterTrim = %08X \n", __func__, value);
 
-    ret |= es9218_write_reg(g_es9218_priv->i2c_client , ES9218P_REG_17,
-                        value&0xFF);
+	if (es9218_power_state == ESS_PS_IDLE) {
+		pr_err("%s() : Invalid vol = %d return \n", __func__, vol);
 
-    ret |= es9218_write_reg(g_es9218_priv->i2c_client,  ES9218P_REG_18,
-                        (value&0xFF00)>>8);
+		return 0;
+	}
 
-    ret |= es9218_write_reg(g_es9218_priv->i2c_client,  ES9218P_REG_19,
-                        (value&0xFF0000)>>16);
+	ret |= es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_MASTERTRIM_4,
+				value & 0xFF);
 
-    ret |= es9218_write_reg(g_es9218_priv->i2c_client,  ES9218P_REG_20,
-                        (value&0xFF000000)>>24);
-    return ret;
+	ret |= es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_MASTERTRIM_3,
+				(value & 0xFF00) >> 8);
+
+	ret |= es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_MASTERTRIM_2,
+				(value & 0xFF0000) >> 16);
+
+	ret |= es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_MASTERTRIM_1,
+				(value & 0xFF000000) >> 24);
+
+	return ret;
 }
 
 static int es9218_set_avc_volume(struct i2c_client *client, int vol)
 {
-    int ret = 0;
-    u8  value;
+	int ret = 0;
+	uint8_t value;
 
-    if (vol >= sizeof(avc_vol_tbl)/sizeof(avc_vol_tbl[0])) {
-        pr_err("%s() : Invalid vol = %d return \n", __func__, vol);
-        return 0;
-    }
+	if (vol >= sizeof(avc_vol_tbl) / sizeof(avc_vol_tbl[0])) {
+		pr_err("%s() : Invalid vol = %d return \n", __func__, vol);
 
-    value = avc_vol_tbl[vol];
+		return 0;
+	}
 
-    pr_info("%s(): AVC Volume = %X \n", __func__, value);
+	value = avc_vol_tbl[vol];
 
-    ret |= es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_03, value);
-    return ret;
+	pr_info("%s(): AVC Volume = %X \n", __func__, value);
+
+	ret |= es9218_write_reg(g_es9218_priv->i2c_client,
+				ES9218P_ANALOG_VOL_CTRL, value);
+
+	return ret;
 }
 
 static int es9218_set_thd(struct i2c_client *client, int headset)
 {
-    int ret = 0;
+	int ret = 0;
 
-    switch (headset) {
-         case 1: // normal
-            /*  Reg #22, #23    : THD_comp2 (-16dB) */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_22, normal_harmonic_comp_left[0]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_23, normal_harmonic_comp_left[1]);
+	switch (headset) {
+	/* Normal HiFi Mode (<=50RZ) */
+	case 1:
+		/* -16dB reduction for THD Compensation 2. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C2_2,
+				       normal_harmonic_comp_left[0]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C2_1,
+				       normal_harmonic_comp_left[1]);
 
-            /*  Reg #24, #25    : THD_comp3 (-16dB) */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_24, normal_harmonic_comp_left[2]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_25, normal_harmonic_comp_left[3]);
+		/* -16dB reduction for THD Compensation 3. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C3_2,
+				       normal_harmonic_comp_left[2]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C3_1,
+				       normal_harmonic_comp_left[3]);
 
-            /*  Reg #53, #54    : THD_comp2 (-16dB) */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_53, normal_harmonic_comp_right[0]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_54, normal_harmonic_comp_right[1]);
+		/* -16dB reduction for THD Compensation 2. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG53_RESERVED,
+				       normal_harmonic_comp_right[0]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG54_RESERVED,
+				       normal_harmonic_comp_right[1]);
 
-            /*  Reg #55, #56    : THD_comp3 (-16dB) */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_55, normal_harmonic_comp_right[2]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_56, normal_harmonic_comp_right[3]);
-            break;
+		/* -16dB reduction for THD Compensation 3. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG55_RESERVED,
+				       normal_harmonic_comp_right[2]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG56_RESERVED,
+				       normal_harmonic_comp_right[3]);
+		break;
 
-        case 2: // advanced
-            /*  Reg #22, #23    : THD_comp2 (-1dB)  */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_22, advance_harmonic_comp_left[0]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_23, advance_harmonic_comp_left[1]);
+	/* High Impedance HiFi Mode (50RZ-600RZ) */
+	case 2:
+		/*  -1dB reduction for THD Compensation 2. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C2_2,
+				       advance_harmonic_comp_left[0]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C2_1,
+				       advance_harmonic_comp_left[1]);
 
-            /*  Reg #24, #25    : THD_comp3 (-1dB)  */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_24, advance_harmonic_comp_left[2]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_25, advance_harmonic_comp_left[3]);
+		/*  -1dB reduction for THD Compensation 3. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C3_2,
+				       advance_harmonic_comp_left[2]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C3_1,
+				       advance_harmonic_comp_left[3]);
 
-            /*  Reg #53, #54    : THD_comp2 (-16dB) */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_53, advance_harmonic_comp_right[0]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_54, advance_harmonic_comp_right[1]);
+		/* -16dB reduction for THD Compensation 2. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG53_RESERVED,
+				       advance_harmonic_comp_right[0]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG54_RESERVED,
+				       advance_harmonic_comp_right[1]);
 
-            /*  Reg #55, #56    : THD_comp3 (-16dB) */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_55, advance_harmonic_comp_right[2]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_56, advance_harmonic_comp_right[3]);
-            break;
+		/* -16dB reduction for THD Compensation 3. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG55_RESERVED,
+				       advance_harmonic_comp_right[2]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG56_RESERVED,
+				       advance_harmonic_comp_right[3]);
+		break;
 
-        case 3: // aux
-            /*  Reg #22, #23    : THD_comp2 (-7dB)  */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_22, aux_harmonic_comp_left[0]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_23, aux_harmonic_comp_left[1]);
+	/* AUX HiFi Mode (>600RZ) */
+	case 3:
+		/* -7dB reduction for THD Compensation 2. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C2_2,
+				       aux_harmonic_comp_left[0]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C2_1,
+				       aux_harmonic_comp_left[1]);
 
-            /*  Reg #24, #25    : THD_comp3 (-7dB)  */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_24, aux_harmonic_comp_left[2]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_25, aux_harmonic_comp_left[3]);
+		/* -7dB reduction for THD Compensation 3. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C3_2,
+				       aux_harmonic_comp_left[2]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_THD_COMP_C3_1,
+				       aux_harmonic_comp_left[3]);
 
-            /*  Reg #53, #54    : THD_comp2 (-16dB) */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_53, aux_harmonic_comp_right[0]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_54, aux_harmonic_comp_right[1]);
+		/* -16dB reduction for THD Compensation 2. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG53_RESERVED,
+				       aux_harmonic_comp_right[0]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG54_RESERVED,
+				       aux_harmonic_comp_right[1]);
 
-            /*  Reg #55, #56    : THD_comp3 (-16dB) */
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_55, aux_harmonic_comp_right[2]);
-            ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_56, aux_harmonic_comp_right[3]);
-            break;
+		/* -16dB reduction for THD Compensation 3. */
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG55_RESERVED,
+				       aux_harmonic_comp_right[2]);
+		ret = es9218_write_reg(g_es9218_priv->i2c_client,
+				       ES9218P_REG56_RESERVED,
+				       aux_harmonic_comp_right[3]);
+		break;
 
-        default :
-            pr_err("%s() : Invalid headset = %d \n", __func__, headset);
-            break;
-    }
-    pr_info("%s(): Headset Type = %d \n", __func__, headset);
-    return ret;
+	default:
+		pr_err("%s() : Invalid headset = %d \n", __func__, headset);
+		break;
+	}
+
+	pr_info("%s(): Headset Type = %d \n", __func__, headset);
+
+	return ret;
 }
 
 static int es9218p_sabre_amp_start(struct i2c_client *client, int headset)
 {
-    int ret = 0;
+	int ret = 0;
 
-    //NOTE  GPIO2 must already be HIGH as part of standby2lpb
 #ifdef CONFIG_MACH_SDM845_JUDY
-    //if(!g_dop_flag)
-        es9218_hph_switch_gpio_L();
+	/* GPIO2 must already be HIGH as part of standby2lpb. */
+	if (!g_dop_flag)
+		es9218_hph_switch_gpio_L();
 #endif
 
-    switch(headset) {
-         case 1:
-            //  normal
-            //
-            //  Low impedance 50RZ or less headphone detected
-            //  Use HiFi1 amplifier mode
-            //
-            pr_notice("%s() : 1 valid headset = %d changing to hifi1.\n", __func__, g_headset_type);
-            es9218p_sabre_lpb2hifione();
-            break;
+	switch (headset) {
+	/* Normal HiFi Mode (<=50RZ) */
+	case 1:
+		pr_notice("%s() : 1 valid headset = %d changing to hifi1.\n",
+			  __func__, g_headset_type);
+		es9218p_sabre_lpb2hifi(1);
+		break;
 
-        case 2:
-            //  advanced
-            //
-            //  High impedance >50RZ - <600RZ headphone detected (64RZ or 300RZ for example)
-            //  Use HiFi2 amplifier mode
-            //
-            pr_notice("%s() : 2 valid headset = %d changing to hifi2.\n", __func__, g_headset_type);
-            es9218p_sabre_lpb2hifitwo();
-            break;
+	/* High Impedance HiFi Mode (50RZ-600RZ) */
+	case 2:
+		pr_notice("%s() : 2 valid headset = %d changing to hifi2.\n",
+			  __func__, g_headset_type);
+		es9218p_sabre_lpb2hifi(2);
+		break;
 
-        case 3:
-            //  aux
-            //
-            //  High impedance >600RZ line-out detected
-            //  Use HiFi1 amplifier mode
-            //
-            pr_notice("%s() : 3 valid headset = %d changing to hifi1.\n", __func__, g_headset_type);
-            es9218p_sabre_lpb2hifione();
-            break;
+	/* AUX HiFi Mode (>600RZ) */
+	case 3:
+		pr_notice("%s() : 3 valid headset = %d changing to hifi1.\n",
+			  __func__, g_headset_type);
+		es9218p_sabre_lpb2hifi(1);
+		break;
 
-        default :
-            pr_err("%s() : Unknown headset = %d \n", __func__, headset);
-            ret = 1;
-            break;
-    }
+	default:
+		pr_err("%s() : Unknown headset = %d \n", __func__, headset);
+		ret = 1;
+		break;
+	}
 
 #ifdef CONFIG_MACH_SDM845_JUDY
-    //if(!g_dop_flag)
-        es9218_hph_switch_gpio_H();
-#endif /* CONFIG_MACH_SDM845_JUDY */
+	if (!g_dop_flag)
+		es9218_hph_switch_gpio_H();
+#endif
 
-    return ret;
+	return ret;
 }
 
 static int es9218p_sabre_amp_stop(struct i2c_client *client, int headset)
 {
-    int ret = 0;
+	int ret = 0;
 
-    switch(headset) {
-         case 1:
-            //  normal
-            //
-            //  Low impedance 32RZ or less headphone detected
-            //  Use HiFi1 amplifier mode
-            //
-            pr_notice("%s() : 1 valid headset = %d changing to lbp.\n", __func__, g_headset_type);
-            es9218p_sabre_hifione2lpb();
-            break;
+	switch (headset) {
+	/* Normal (<=50RZ) */
+	case 1:
+		pr_notice("%s() : 1 valid headset = %d changing to lpb.\n",
+			  __func__, g_headset_type);
+		es9218p_sabre_hifi2lofi2lpb();
+		break;
 
-        case 2:
-            //  advanced
-            //
-            //  High impedance >32RZ - <600RZ headphone detected (64RZ or 300RZ for example)
-            //  Use HiFi2 amplifier mode
-            //
-            pr_notice("%s() : 2 valid headset = %d changing to lbp.\n", __func__, g_headset_type);
-            es9218p_sabre_hifitwo2lpb();
-            break;
+	/* High Impedance (50RZ-600RZ) */
+	case 2:
+		pr_notice("%s() : 2 valid headset = %d changing to lpb.\n",
+			  __func__, g_headset_type);
+		es9218p_sabre_hifi2lofi2lpb();
+		break;
 
-        case 3:
-            //  aux
-            //
-            //  High impedance >600RZ line-out detected
-            //  Use HiFi1 amplifier mode
-            //
-            pr_notice("%s() : 3 valid headset = %d changing to lbp.\n", __func__, g_headset_type);
-            es9218p_sabre_hifione2lpb();
-            break;
+	/* AUX (>600RZ) */
+	case 3:
+		pr_notice("%s() : 3 valid headset = %d changing to lpb.\n",
+			  __func__, g_headset_type);
+		es9218p_sabre_hifi2lofi2lpb();
+		break;
 
-        default :
-            pr_err("%s() : Invalid headset = %d \n", __func__, g_headset_type);
-            ret = 1;
-            break;
-    }
-
-    return ret;
-}
-
-
-/*
- *  Program stage1 and stage2 filter coefficients
- */
-static int es9218_sabre_cfg_custom_filter(struct sabre_custom_filter *sabre_filter)
-{
-    int rc, i, *coeff;
-    int count_stage1;
-    u8  rv, reg;
-
-    reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
-    pr_info("%s(): g_sabre_cf_num = %d, ES9218P_REG_07:%x \n", __func__, g_sabre_cf_num, reg);
-    reg &= ~0xE0;
-
-    if (g_sabre_cf_num > 3) {
-        if(es9218_rate == 384000)
-           rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_44, 0x01);
-        else
-           rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_44, 0x00);
-
-        switch (g_sabre_cf_num) {
-            case 4:
-            // 3b000: linear phase fast roll-off filter
-                rv = reg|0x00;
-                rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv);
-                break;
-            case 5:
-            // 3b001: linear phase slow roll-off filter
-                rv = reg|0x20;
-                rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv);
-                break;
-            case 6:
-            // 3b010: minimum phase fast roll-off filter #1
-                rv = reg|0x40;
-                rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv);
-                break;
-            case 7:
-            // 3b011: minimum phase slow roll-off filter
-                rv = reg|0x60;
-                rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv);
-                break;
-            case 8:
-            /* 3b100: apodizing fast roll-off filter type 1 (default)
-               change into Minimum Phase Fast roll-off for response of sample rate except mqa*/
-                rv = reg|0x40;
-                rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv);
-                break;
-            case 9:
-            /* 3b101: apodizing fast roll-off filter type 2
-               change into Minimum Phase Fast roll-off for response of sample rate */
-                rv = reg|0x40;
-                rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv);
-                break;
-            case 10:
-            // 3b110: hybrid fast roll-off filter
-                rv = reg|0xC0;
-                rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv);
-                break;
-            case 11:
-            // 3b111: brick wall filter
-                rv = reg|0xE0;
-                rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv);
-                break;
-            default:
-                pr_info("%s(): default = %d \n", __func__, g_sabre_cf_num);
-                break;
-        }
-        return rc;
-    }
-    count_stage1 = sizeof(sabre_filter->stage1_coeff)/sizeof(sabre_filter->stage1_coeff[0]);
-
-    pr_info("%s: count_stage1 : %d",__func__,count_stage1);
-
-    rv = (sabre_filter->symmetry << 2) | 0x02;        // set the write enable bit
-    rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_44, rv);
-    if (rc < 0) {
-        pr_err("%s: rc = %d return ",__func__, rc);
-        return rc;
-    }
-
-    rv = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_40 - 1);
-    coeff = sabre_filter->stage1_coeff;
-    for (i = 0; i < count_stage1 ; i++) { // Program Stage 1 filter coefficients
-        u8 value[4];
-        value[0] =  i;
-        value[1] = (*coeff & 0xff);
-        value[2] = ((*coeff>>8) & 0xff);
-        value[3] = ((*coeff>>16) & 0xff);
-        i2c_smbus_write_block_data(g_es9218_priv->i2c_client, ES9218P_REG_40 - 1, 4, value);
-        coeff++;
-    }
-    coeff = sabre_filter->stage2_coeff;
-    for (i = 0; i < 16; i++) { // Program Stage 2 filter coefficients
-        u8 value[4];
-        value[0] =  128 + i;
-        value[1] = (*coeff & 0xff);
-        value[2] = ((*coeff>>8) & 0xff);
-        value[3] = ((*coeff>>16) & 0xff);
-        i2c_smbus_write_block_data(g_es9218_priv->i2c_client, ES9218P_REG_40 - 1, 4, value);
-        coeff++;
-    }
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_40 - 1, rv);
-
-    rv = (sabre_filter->shape << 5); // select the custom filter roll-off shape
-    rv |= 0x80;
-    rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv);
-    if (rc < 0) {
-        pr_err("%s: rc = %d return ",__func__, rc);
-        return rc;
-    }
-    rv = (sabre_filter->symmetry << 2); // disable the write enable bit
-    rv |= 0x1; // Use the custom oversampling filter.
-    rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_44, rv);
-    if (rc < 0) {
-        pr_err("%s: rc = %d return ",__func__, rc);
-        return rc;
-    }
-    return 0;
-}
-
-//Version 1.2 - December 15, 2016
-//
-// changes:
-// corrected some differences between ess kelowna functions and ess korea implementations
-// added lpb2hifitwo option1
-// minor changes to hifitwo2lpb and hifione2lpb
-
-static int  es9218p_sabre_lpb2hifione(void)
-{
-    //declare register starting point so we can use incremental OR / AND+1C instead of hex literals
-	// x |= y; //set bits in x which are 1's in y
-	// x &= ~y; //clear bits in x which are 1's in y
-    int value = 0;
-    int register_45_value = 0;
-    int register_46_value = 0;
-    int register_47_value = 0;
-    int register_48_value = 0;
-
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_13, 0x00);// Enable THD comp
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_14, 0x25);// set Soft start type and time
-        if(g_headset_type == 1){ // updated_ESS_1122
-			es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_21, 0x09); //ESS_0103 ABG tune 2.8-->2.5V  // ABG tune 1.4 / 2.8V
-        }
-        else
-        {
-			es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_21, 0x05);// ABG tune HiFi 1 1.4V
-        }
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_06, 0x47);// set vol rate to fast
-    }
-#endif
-
-    pr_info("%s(): entry: state = %s\n", __func__, power_state[es9218_power_state]);
-#ifdef USE_HPAHiQ   // Reg#48 = 0x0F => 2mA more and THD 2dB, Reg#48 = 0x07 => nornal mode
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, register_48_value = 0x0F);//HPAHiQ = 1, EN_SEPARATE_THD_COMP = 1, STATE3_CTRL_SEL = 11 for minimum state-machine delay time
-#else
-	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, register_48_value = 0x07);//HPAHiQ = 0, EN_SEPARATE_THD_COMP = 1, STATE3_CTRL_SEL = 11 for minimum state-machine delay time
-#endif
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R48 = %X \n", __func__, register_48_value);
-    mdelay(g_debug_delay);
-#endif
-
-    if( g_es9218_priv->es9218_data->use_internal_ldo ) {
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value |= 0x80); // enable overrides, amp input shunt and output shunt both engaged
-    } else {
-        register_46_value |= 0x80; // enable overrides, amp input shunt and output shunt both engaged
-        register_46_value |= 0x04; // SEL1V = 1, use external LDO.
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value); // enable overrides, amp input shunt and output shunt both engaged
-    }
-
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R46 = %X \n", __func__, register_46_value);
-    mdelay(g_debug_delay);
-#endif
-
-#ifdef ES9219C // updated_ESS_1122
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-		if(g_headset_type == 1){
-	   		 es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x02); //ESS_0103 sets to HiFi1 // AMP_PDB_SS = 0, AMP_MODE - HiFi2 //updated_ESS_1121
-		} else {
-			 es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x02); // AMP_PDB_SS = 0, AMP_MODE - HiFi1 //updated_ESS_1121
-		}
-    } else {
-		es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x02); // AMP_PDB_SS = 0, AMP_MODE - HiFi1 //updated_ESS_1121
-    }
-#else
-		es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x02); // AMP_PDB_SS = 0, AMP_MODE - HiFi1
-#endif
-
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R32 = %X \n", __func__, 0x02);
-    mdelay(g_debug_delay);
-#endif
-
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-        //Do nothing
-    }
-    else{
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_03, 0x18); // ATC to min
-    }
-#else
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_03, 0x18); // ATC to min
-#endif
-
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R03 = %X \n", __func__, 0x18);
-    mdelay(g_debug_delay);
-#endif
-
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_47, register_47_value |= 0x08); // CPL_WEAK = 1 preset low voltage chargepump for weak mode
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R47 = %X \n", __func__, register_47_value);
-    mdelay(g_debug_delay);
-#endif
-
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_45, register_45_value |= 0x0C); // CPH_WEAK = 1 preset high voltage chargepump for weak mode & APDB =1
-    }
-    else{
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_45, register_45_value |= 0x08); // CPH_WEAK = 1 preset high voltage chargepump for weak mode
-    }
-#else
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_45, register_45_value |= 0x08); // CPH_WEAK = 1 preset high voltage chargepump for weak mode
-#endif
-
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R45 = %X \n", __func__, register_45_value);
-    mdelay(g_debug_delay);
-#endif
-
-    //0x68
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_47, register_47_value |= 0x60); // ENCP_OE = 1, ENAUX_OE = 1 enable override control of AUX switch
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R47 = %X \n", __func__, register_47_value);
-    mdelay(g_debug_delay);
-#endif
-
-#ifdef ES9219C //updated_ESS_1121
-	mdelay(5);
-#endif
-
-    //0x1c
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_45, register_45_value |= 0x14); // APDB = 1, CPH_strong = 1 set high voltage chargepump for strong mode
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R45 = %X \n", __func__, register_45_value);
-    mdelay(g_debug_delay);
-#endif
-
-    //0x78
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_47, register_47_value |= 0x10); // CPL_strong = 1 set low voltage chargepump for strong mode
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R47 = %X \n", __func__, register_47_value);
-    mdelay(g_debug_delay);
-#endif
-
-    mdelay(5); // required to allow Vref (APDB) voltage to settle before enabling AVDD_DAC regulator (AREG_PDB)
-
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-		// 0x7a
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_47, register_47_value |= 0x02); // Enable ENSM PS
-    	mdelay(1); // updated_ESS_1121
+	default:
+		pr_err("%s() : Invalid headset = %d \n", __func__,
+		       g_headset_type);
+		ret = 1;
+		break;
 	}
-#endif
 
-    //0x7c
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_45, register_45_value |= 0x60); // ENHPA = 1, AREG_PDB = 1 enable internal AVCC_DAC regulator
-#ifdef ES9219C // updated_ESS_1121
-	mdelay(1);
-#endif
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R45 = %X \n", __func__, register_45_value);
-    mdelay(g_debug_delay);
-#endif
-
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-		//0x83
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value |= 0x03); // SHTINB = 1 SHTOUTB =1 disengage amplifier input shunt
-		mdelay(1); //updated_ESS_1121
-    }
-    else{
-        //0x81
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value |= 0x01); // SHTINB = 1 disengage amplifier input shunt
-    }
-#else
-    //0x81
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value |= 0x01); // SHTINB = 1 disengage amplifier input shunt
-#endif
-
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R46 = %X \n", __func__, register_46_value);
-    mdelay(g_debug_delay);
-#endif
-
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-		//0x47
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, register_48_value |= 0x40); // ENHPA_OUT = 1 enable amplifier output stage
-        mdelay(20); // updated_ESS_1121 5m -> 20m
-    }
-    else{
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, register_48_value |= 0x40); // ENHPA_OUT = 1 enable amplifier output stage
-    }
-#else
-    //0x47
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, register_48_value |= 0x40); // ENHPA_OUT = 1 enable amplifier output stage
-#endif
-
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R48 = %X \n", __func__, register_48_value);
-    mdelay(g_debug_delay);
-#endif
-
-    value = avc_vol_tbl[g_avc_volume];
-
-    pr_info("%s(): AVC Volume = %X \n", __func__, value);
-
-    //WARNING register 03 is also programmed in bypass2hifi.  Beware of conflicts.
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_03, value); // set ATC to original level
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R03 = %X \n", __func__, value);
-    mdelay(g_debug_delay);
-#endif
-
-
-#ifdef ES9219C // updataed_1018
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_14,  0xA5); // sfot start = 1
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_135,  0x17); // FB amp on + ESS_0103 enable jdet comparator
-    }
-#endif
-
-    if( g_es9218_priv->es9218_data->use_internal_ldo ) {
-#ifdef ES9219C
-        if (g_es9218_priv->es9218_data->is_es9219c) {
-#if 0	//ESS_0103
-            es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value |= 0x01); // SHTINB = 1
-            mdelay(5);
-            es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value |= 0x02); // SHTOUTB = 1
-            mdelay(5);
-            es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value &= ~0x80); // Disable overrides
-            mdelay(5);
-#endif //ESS_0103
-        } else {
-            es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value = 0x03); // SHTOUTB = 1, disable overrides.  Register 32 will take over control and hold sabre in HiFi1
-        }
-#else
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value = 0x03); // SHTOUTB = 1, disable overrides.  Register 32 will take over control and hold sabre in HiFi1
-#endif
-    } else {
-        register_46_value = 0x03; // SHTOUTB = 1, disable overrides.  Register 32 will take over control and hold sabre in HiFi1
-        register_46_value |= 0x04; //use external LDO, set SEL1V bit.
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value);
-    }
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R46 = %X \n", __func__, register_46_value);
-    mdelay(g_debug_delay);
-#endif
-
-    //////////////////////////////
-    // Sabre is now in HiFi1 mode.
-	// Override bits are not cleared but they are disabled.
-    //////////////////////////////
-    return  0;
+	return ret;
 }
 
-static int  es9218p_sabre_lpb2hifitwo(void)
+/**
+ * es9218_sabre_cfg_custom_filter() - Program the filter coefficients.
+ */
+static int
+es9218_sabre_cfg_custom_filter(struct sabre_custom_filter *sabre_filter)
 {
-    //declare register starting point so we can use incremental OR / AND+1C instead of hex literals
-    // x |= y; //set bits in x which are 1's in y
-    // x &= ~y; //clear bits in x which are 1's in y
-    int value = 0;
-    int register_45_value = 0;
-    int register_46_value = 0;
-    int register_47_value = 0;
-    int register_48_value = 0;
+	int rc, i, *coeff;
+	int count_stage1;
+	uint8_t rv, reg;
 
-    pr_info("%s(): entry: state = %s\n", __func__, power_state[es9218_power_state]);
+	reg = es9218_read_reg(g_es9218_priv->i2c_client,
+			      ES9218P_FILTER_BAND_SYSTEM_MUTE);
+	pr_info("%s(): g_sabre_cf_num = %d, ES9218P_FILTER_BAND_SYSTEM_MUTE:%x \n",
+		__func__, g_sabre_cf_num, reg);
+	reg &= ~0xE0;
 
-#ifdef USE_HPAHiQ   // Reg#48 = 0x0F => 2mA more and THD 2dB, Reg#48 = 0x07 => nornal mode
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, register_48_value = 0x0F);//HPAHiQ = 1, EN_SEPARATE_THD_COMP = 1, STATE3_CTRL_SEL = 11 for minimum state-machine delay time
+	if (g_sabre_cf_num > 3) {
+		if (es9218_rate == 352800 || es9218_rate == 384000)
+			rc = es9218_write_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FIR_CONFIG, 0x01);
+		else
+			rc = es9218_write_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FIR_CONFIG, 0x00);
+
+		switch (g_sabre_cf_num) {
+		/* Linear Phase Fast Roll-off Filter */
+		case 4:
+			rv |= 0x00;
+			rc = es9218_write_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FILTER_BAND_SYSTEM_MUTE,
+					      rv);
+			break;
+
+		/* Linear Phase Slow Roll-off Filter */
+		case 5:
+			rv |= 0x20;
+			rc = es9218_write_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FILTER_BAND_SYSTEM_MUTE,
+					      rv);
+			break;
+
+		/* Minimum Phase Fast Roll-off Filter */
+		case 6:
+			rv |= 0x40;
+			rc = es9218_write_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FILTER_BAND_SYSTEM_MUTE,
+					      rv);
+			break;
+
+		/* Minimum Phase Slow Roll-off Filter */
+		case 7:
+			rv |= 0x60;
+			rc = es9218_write_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FILTER_BAND_SYSTEM_MUTE,
+					      rv);
+			break;
+
+		/* Apodizing Fast Roll-off Filter Type 1 and 2 */
+		case 8:
+		case 9:
+			/*
+			 * Switch to the Minimum Phase Fast Roll-off Filter for the correct
+			 * responce of the specified sample rate unless decoding MQA.
+			 */
+			rv |= 0x40;
+			rc = es9218_write_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FILTER_BAND_SYSTEM_MUTE,
+					      rv);
+			break;
+
+		/* Hybrid Fast Roll-off Filter */
+		case 10:
+			rv |= 0xC0;
+			rc = es9218_write_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FILTER_BAND_SYSTEM_MUTE,
+					      rv);
+			break;
+
+		/* Brick Wall Filter */
+		case 11:
+			rv |= 0xE0;
+			rc = es9218_write_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FILTER_BAND_SYSTEM_MUTE,
+					      rv);
+			break;
+
+		default:
+			pr_info("%s(): default = %d \n", __func__,
+				g_sabre_cf_num);
+			break;
+		}
+
+		return rc;
+	}
+
+	count_stage1 = sizeof(sabre_filter->stage1_coeff) /
+		       sizeof(sabre_filter->stage1_coeff[0]);
+
+	pr_info("%s: count_stage1 : %d", __func__, count_stage1);
+
+	rv = (sabre_filter->symmetry << 2) |
+	     0x02; /* Set the write-enable bit. */
+	rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_FIR_CONFIG,
+			      rv);
+	if (rc < 0) {
+		pr_err("%s: rc = %d return ", __func__, rc);
+		return rc;
+	}
+
+	rv = es9218_read_reg(g_es9218_priv->i2c_client,
+			     ES9218P_FIR_RAM_ADDR - 1);
+
+	/* Program the stage 1 filter coefficients. */
+	coeff = sabre_filter->stage1_coeff;
+	for (i = 0; i < count_stage1; i++) {
+		uint8_t value[4];
+		value[0] = i;
+		value[1] = (*coeff & 0xff);
+		value[2] = ((*coeff >> 8) & 0xff);
+		value[3] = ((*coeff >> 16) & 0xff);
+		i2c_smbus_write_block_data(g_es9218_priv->i2c_client,
+					   ES9218P_FIR_RAM_ADDR - 1, 4, value);
+		coeff++;
+	}
+
+	/* Program the stage 2 filter coefficients. */
+	coeff = sabre_filter->stage2_coeff;
+	for (i = 0; i < 16; i++) {
+		uint8_t value[4];
+		value[0] = 128 + i;
+		value[1] = (*coeff & 0xff);
+		value[2] = ((*coeff >> 8) & 0xff);
+		value[3] = ((*coeff >> 16) & 0xff);
+		i2c_smbus_write_block_data(g_es9218_priv->i2c_client,
+					   ES9218P_FIR_RAM_ADDR - 1, 4, value);
+		coeff++;
+	}
+
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_FIR_RAM_ADDR - 1,
+			 rv);
+
+	/* Select the custom filter roll-off shape. */
+	rv = (sabre_filter->shape << 5);
+	rv |= 0x80;
+
+	rc = es9218_write_reg(g_es9218_priv->i2c_client,
+			      ES9218P_FILTER_BAND_SYSTEM_MUTE, rv);
+	if (rc < 0) {
+		pr_err("%s: rc = %d return ", __func__, rc);
+
+		return rc;
+	}
+
+	rv = (sabre_filter->symmetry << 2); /* Unset the write-enable bit. */
+	rv |= 0x1; /* Use the custom oversampling filter. */
+	rc = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_FIR_CONFIG,
+			      rv);
+	if (rc < 0) {
+		pr_err("%s: rc = %d return ", __func__, rc);
+
+		return rc;
+	}
+
+	return 0;
+}
+
+static int es9218p_sabre_lpb2hifi(int mode)
+{
+	/*
+	 * Declare the register starting point so that we can use incremental
+	 * OR and AND+1C instead of hex literals. For example:
+	 *
+	 * x |= y would set bits in x which are 1 in y.
+	 * x &= ~y would clear bits in x which are 1 in y.
+	 */
+	uint8_t register_45_value = 0;
+	uint8_t register_46_value = 0;
+	uint8_t register_47_value = 0;
+	uint8_t register_48_value = 0;
+
+	int value = 0;
+
+	pr_info("%s(): entry: state = %s\n", __func__,
+		power_state[es9218_power_state]);
+
+	/*
+	 * HPAHiQ implies EN_SEPARATE_THD_COMP = 1 and STATE3_CTRL_SEL = 11, for
+	 * the minimum state-machine delay time.
+	 */
+#if USE_HPAHiQ == 1
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG48_RESERVED,
+			 register_48_value = 0x0F);
 #else
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, register_48_value = 0x07);//HPAHiQ = 0, EN_SEPARATE_THD_COMP = 1, STATE3_CTRL_SEL = 11 for minimum state-machine delay time
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG48_RESERVED,
+			 register_48_value = 0x07);
 #endif
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R48 = %X \n", __func__, register_48_value);
-    mdelay(g_debug_delay);
-#endif
-
-    if( g_es9218_priv->es9218_data->use_internal_ldo ) {
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value |= 0x80); // enable overrides, amp input shunt and output shunt both engaged
-    } else {
-        register_46_value |= 0x80; // enable overrides, amp input shunt and output shunt both engaged
-        register_46_value |= 0x04; //use external LDO, set SEL1V bit.
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value);
-    }
-
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R46 = %X \n", __func__, register_46_value);
-    mdelay(g_debug_delay);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R48 = %X \n", __func__, register_48_value);
+	mdelay(g_debug_delay);
 #endif
 
-    //
-    // This block is different for HiFi2
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x03); // AMP_PDB_SS = 0, AMP_MODE - HiFi2
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R32 = %X \n", __func__, 0x03);
-    mdelay(g_debug_delay);
-#endif
-    // This block is different for HiFi2
-    //
+	/*
+	 * Enable overrides since the amp input shunt and output shunt are both
+	 * engaged.
+	 */
+	if (g_es9218_priv->es9218_data->use_internal_ldo) {
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_REG46_RESERVED,
+				 register_46_value |= 0x80);
+	} else {
+		register_46_value |= 0x80;
 
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_03, 0x18); // ATC to min
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R03 = %X \n", __func__, 0x18);
-    mdelay(g_debug_delay);
-#endif
+		/* Set SEL1V to 1 and use the external LDO. */
+		register_46_value |= 0x04;
 
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_47, register_47_value |= 0x08); // CPL_WEAK = 1 preset low voltage chargepump for weak mode
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R47 = %X \n", __func__, register_47_value);
-    mdelay(g_debug_delay);
-#endif
-
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_45, register_45_value |= 0x08); // CPH_WEAK = 1 preset high voltage chargepump for weak mode
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R45 = %X \n", __func__, register_45_value);
-    mdelay(g_debug_delay);
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_REG46_RESERVED, register_46_value);
+	}
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R46 = %X \n", __func__, register_46_value);
+	mdelay(g_debug_delay);
 #endif
 
-    //0x68
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_47, register_47_value |= 0x60); // ENCP_OE = 1, ENAUX_OE = 1 enable override control of AUX switch
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R47 = %X \n", __func__, register_47_value);
-    mdelay(g_debug_delay);
+	switch (mode) {
+	case 1:
+		/* Set AMP_PDB_SS to 0. */
+		es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_AMP_CONFIG,
+				 0x02);
+#if ES9218P_DEBUG == 1
+		pr_info("%s(): R32 = %X \n", __func__, 0x02);
+		mdelay(g_debug_delay);
+#endif
+		break;
+	case 2:
+		/*
+		 * Set AMP_PDB_SS to 0.
+		 *
+		 * Note: This block is different for the HiFi2 Mode.
+		 */
+		es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_AMP_CONFIG,
+				 0x03);
+#if ES9218P_DEBUG == 1
+		pr_info("%s(): R32 = %X \n", __func__, 0x03);
+		mdelay(g_debug_delay);
+#endif
+		break;
+	}
+
+	/* Set ATC to the minimum . */
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_ANALOG_VOL_CTRL,
+			 0x18);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R03 = %X \n", __func__, 0x18);
+	mdelay(g_debug_delay);
 #endif
 
-    //0x1c
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_45, register_45_value |= 0x14); // APDB = 1, CPH_strong = 1 set high voltage chargepump for strong mode
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R45 = %X \n", __func__, register_45_value);
-    mdelay(g_debug_delay);
+	/* Preset low voltage chargepump for the weak CPL mode. */
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG47_RESERVED,
+			 register_47_value |= 0x08);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R47 = %X \n", __func__, register_47_value);
+	mdelay(g_debug_delay);
 #endif
 
-    //0x78
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_47, register_47_value |= 0x10); // CPL_strong = 1 set low voltage chargepump for strong mode
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R47 = %X \n", __func__, register_47_value);
-    mdelay(g_debug_delay);
+	/* Preset high voltage chargepump for the weak CPH mode. */
+	es9218_write_reg(g_es9218_priv->i2c_client,
+			 ES9218P_ANALOG_CTRL_OVERRIDE,
+			 register_45_value |= 0x08);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R45 = %X \n", __func__, register_45_value);
+	mdelay(g_debug_delay);
 #endif
 
-    mdelay(5); // required to allow Vref (APDB) voltage to settle before enabling AVDD_DAC regulator (AREG_PDB)
-
-    //0x7c
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_45, register_45_value |= 0x60); // ENHPA = 1, AREG_PDB = 1 enable internal AVCC_DAC regulator
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R45 = %X \n", __func__, register_45_value);
-    mdelay(g_debug_delay);
+	/* Enable override control of AUX switch. */
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG47_RESERVED,
+			 register_47_value |= 0x60);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R47 = %X \n", __func__, register_47_value);
+	mdelay(g_debug_delay);
 #endif
 
-    //0x81
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value |= 0x01); // SHTINB = 1 disengage amplifier input shunt
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R46 = %X \n", __func__, register_46_value);
-    mdelay(g_debug_delay);
+	/* Set high voltage chargepump for the strong CPH mode. */
+	es9218_write_reg(g_es9218_priv->i2c_client,
+			 ES9218P_ANALOG_CTRL_OVERRIDE,
+			 register_45_value |= 0x14);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R45 = %X \n", __func__, register_45_value);
+	mdelay(g_debug_delay);
 #endif
 
-    //0x4F
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, register_48_value |= 0x40); // ENHPA_OUT = 1 enable amplifier output stage
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R48 = %X \n", __func__, register_48_value);
-    mdelay(g_debug_delay);
+	/* Set high voltage chargepump for the strong CPL mode. */
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG47_RESERVED,
+			 register_47_value |= 0x10);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R47 = %X \n", __func__, register_47_value);
+	mdelay(g_debug_delay);
 #endif
 
-    //
-    // This block is extra for HiFi2
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value &= ~0x01); // SHTINB = 0 engage input shunt
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R46 = %X \n", __func__, register_46_value);
-    mdelay(g_debug_delay);
+	/*
+	 * This is *required* to allow the Vref (APDB) voltage to settle before
+	 * enabling the AVDD_DAC regulator (AREG_PDB).
+	 */
+	mdelay(5);
+
+	/* Enable internal AVCC_DAC regulator. */
+	es9218_write_reg(g_es9218_priv->i2c_client,
+			 ES9218P_ANALOG_CTRL_OVERRIDE,
+			 register_45_value |= 0x60);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R45 = %X \n", __func__, register_45_value);
+	mdelay(g_debug_delay);
 #endif
 
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_47, register_47_value |= 0x05); // SEL3V3 = 1, SEL3V3_PS = 1 set the amplifier power switch for HiFi2 mode
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R46 = %X \n", __func__, register_47_value);
-    mdelay(g_debug_delay);
+	/* Disengage the amplifier input shunt. */
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG46_RESERVED,
+			 register_46_value |= 0x01);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R46 = %X \n", __func__, register_46_value);
+	mdelay(g_debug_delay);
 #endif
 
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value |= 0x01); // SHTINB = 1 disengage input shunt
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R46 = %X \n", __func__, register_46_value);
-    mdelay(g_debug_delay);
+	/* Enable the amplifier output stage. */
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG48_RESERVED,
+			 register_48_value |= 0x40);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R48 = %X \n", __func__, register_48_value);
+	mdelay(g_debug_delay);
 #endif
 
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_47, register_47_value |= 0x02); // ENSMPS = 1 change the power switch to strong mode
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R46 = %X \n", __func__, register_47_value);
-    mdelay(g_debug_delay);
-#endif
-    // This block is extra for HiFi2
-    //
-
-    value = avc_vol_tbl[g_avc_volume];
-    pr_info("%s(): AVC Volume = %X \n", __func__, value);
-
-    //WARNING register 03 is also programmed in bypass2hifi.  Beware of conflicts.
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_03, value); // set ATC to original level
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R03 = %X \n", __func__, value);
-    mdelay(g_debug_delay);
+	if (mode == 2) {
+		/*
+		 * Engage the input shunt.
+		 *
+		 * Note: This block is exclusive to the HiFi2 Mode.
+		 */
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_REG46_RESERVED,
+				 register_46_value &= ~0x01);
+#if ES9218P_DEBUG == 1
+		pr_info("%s(): R46 = %X \n", __func__, register_46_value);
+		mdelay(g_debug_delay);
 #endif
 
-    if( g_es9218_priv->es9218_data->use_internal_ldo ) {
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value = 0x03); // SHTOUTB = 1, disable overrides, amp input shunt and output shunt both disengaged
-    } else {
-        register_46_value = 0x03; // SHTOUTB = 1, disable overrides.  Register 32 will take over control and hold sabre in HiFi2.
-        register_46_value |= 0x04; // use external LDO, set SEL1V bit.
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, register_46_value);
-    }
-
-#ifdef ES9218P_DEBUG
-    pr_info("%s(): R46 = %X \n", __func__, register_46_value);
-    mdelay(g_debug_delay);
+		/*
+		 * Set the amplifier power switch.
+		 *
+		 * Note: This block is exclusive to the HiFi2 Mode.
+		 */
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_REG47_RESERVED,
+				 register_47_value |= 0x05);
+#if ES9218P_DEBUG == 1
+		pr_info("%s(): R46 = %X \n", __func__, register_47_value);
+		mdelay(g_debug_delay);
 #endif
-    //////////////////////////////
-    // Sabre is now in HiFi2 mode.
-    // Override bits are not cleared but they are disabled.
-    //////////////////////////////
-    return  0;
+
+		/*
+		 * Disengage the input shunt.
+		 *
+		 * Note: This block is exclusive to the HiFi2 Mode.
+		 */
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_REG46_RESERVED,
+				 register_46_value |= 0x01);
+#if ES9218P_DEBUG == 1
+		pr_info("%s(): R46 = %X \n", __func__, register_46_value);
+		mdelay(g_debug_delay);
+#endif
+
+		/*
+		 * Change the power switch to the strong mode.
+		 *
+		 * Note: This block is exclusive to the HiFi2 Mode.
+		 */
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_REG47_RESERVED,
+				 register_47_value |= 0x02);
+#if ES9218P_DEBUG == 1
+		pr_info("%s(): R46 = %X \n", __func__, register_47_value);
+		mdelay(g_debug_delay);
+#endif
+	}
+
+	value = avc_vol_tbl[g_avc_volume];
+	pr_info("%s(): AVC Volume = %X \n", __func__, value);
+
+	/*
+	 * Set ATC to the original level.
+	 *
+	 * Note: Register 3 is also programmed in bypass2hifi, so beware of
+	 * conflicts.
+	 */
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_ANALOG_VOL_CTRL,
+			 value);
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R03 = %X \n", __func__, value);
+	mdelay(g_debug_delay);
+#endif
+
+	/*
+	 * Disable overrides.
+	 *
+	 * Note: Register 32 will take over control and hold SABRE in HiFi1
+	 * Mode, while the amp input shunt and output shunt are both disengaged
+	 * in HiFi2 Mode.
+	 */
+	if (g_es9218_priv->es9218_data->use_internal_ldo) {
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_REG46_RESERVED,
+				 register_46_value = 0x03);
+	} else {
+		register_46_value = 0x03;
+		/* Set the SEL1V bit, and use the external LDO. */
+		register_46_value |= 0x04;
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_REG46_RESERVED, register_46_value);
+	}
+#if ES9218P_DEBUG == 1
+	pr_info("%s(): R46 = %X \n", __func__, register_46_value);
+	mdelay(g_debug_delay);
+#endif
+
+	/*
+	 * SABRE is now in HiFi{1,2} Mode.
+	 *
+	 * Note: Override bits are not cleared but they are disabled.
+	 */
+
+	return 0;
 }
 
-static int  es9218p_standby2lpb(void)
+/**
+ * es9218p_sabre_standby2lpb() - Switch from standby to LPB Mode.
+ *
+ * This is the ESS recommended sequence for transitioning from Standby to Low
+ * Power Bypass (LPB).
+ */
+static int es9218p_sabre_standby2lpb(void)
 {
-    /////////////////////////////////////////////////////////////////////////////////
-    // ESS recommended sequence for transition from Standby to Low Power Bypass (LPB)
-	/////////////////////////////////////////////////////////////////////////////////
+	pr_info("%s(): entry: state = %s\n", __func__,
+		power_state[es9218_power_state]);
 
-    pr_info("%s(): entry: state = %s\n", __func__, power_state[es9218_power_state]);
+	/* Set GPIO2 to HIGH to switch to LPB Mode. */
+	es9218_hph_switch_gpio_H();
 
-	es9218_hph_switch_gpio_H(); // GPIO2 HIGH to activate LPB mode
-
-    return  0;
+	return 0;
 }
 
-
-static int  es9218p_lpb2standby(void)
+static int es9218p_sabre_lpb2standby(void)
 {
-    es9218_hph_switch_gpio_L(); //GPIO2 low to move into standby mode
-    mdelay(10); // lots of extra time for chargepumps to completely discharge before power off, may not be necessary.  Tune lower as needed.
-    return  0;
+	/* Set GPIO2 to LOW to switch to Standby. */
+	es9218_hph_switch_gpio_L();
+
+	/*
+	 * Allow time for chargepumps to completely discharge before power
+	 * off.
+	 */
+	mdelay(3);
+
+	return 0;
 }
 
-#ifdef WORKAROUND_TICK_NOISE
-void wcd_set_clamp_on_mic(int value);
-static int force_set_clamper_by_sleep_work = 0;
-#endif /* WORKAROUND_TICK_NOISE */
-
-static int  es9218p_sabre_hifione2lpb(void)
+static int es9218p_sabre_hifi2lofi2lpb(void)
 {
-    pr_info("%s()\n", __func__);
-
-    // if hifi to lpb pops, set R7[0] = 1 manually trigger mute before change amp mode
-    // int rv = 0;
-    // es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07); //WARNING this register read will slow down the transition! Would be faster to know what R7 value is already.
-    // es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv |= 0x01);
-    //
-
-#ifdef ES9219C
-
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-#if 1 //ESS_0103
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_14, 0x25); // soft start disable (ramp down)
-        //  mdelay(50);
-        //	mdelay(20);
-        mdelay(40);
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_02, 0x34);
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_135, 0x10);  // disable ATR
-        mdelay(2);
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, 0x81);  //engage output shunt
-        mdelay(2);
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, 0x07);  //disable enhpa out
-        mdelay(3);
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x00);  // switch to CoreOn
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, 0x81);  //engage output shunt
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, 0x80);  //engage input shunt
-        mdelay(2);
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x01);  // switch to LowFi
-        mdelay(5);
-
-#else // ESS_0103
-//ESS_1213_2
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_15, 0xff);      // Digital volume down
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_16, 0xff);      // Digital volume down
-        mdelay(5);
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_14, 0x00);      // soft start = 0
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_03, 0x18);      // Set AVC to min
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, 0x40);      // ENHPA_OUT = 0 disable amplifier output stage
-        mdelay(5);
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x00);      // AMP_PDB_SS = 0, AMP_MODE - Core On
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, 0x00);      // Disable overries
-        mdelay(10);
-
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_21, 0x0D);      // ABG Tune
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9219C_REG_135, 0x10);     // FB
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_45, 0x00);
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_46, 0x00);
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_47, 0x00);
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_48, 0x01);
-//ESS_1213_2
-#endif // ESS_0103
-    }
-    else{
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x00);      // amp mode core on, amp mode gpio set to trigger Core On
-    }
-#else
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x00);      // amp mode core on, amp mode gpio set to trigger Core On
+#if WORKAROUND_FOR_LOFI_POP == 1
+	uint8_t rv = es9218_read_reg(g_es9218_priv->i2c_client,
+				     ES9218P_FILTER_BAND_SYSTEM_MUTE);
 #endif
 
-    ///////////////////////////////
-    // sabre is now in LowFi mode controlled by GPIO2
-    ///////////////////////////////
+	pr_info("%s()\n", __func__);
 
-    if(g_dop_flag) {
-        pr_debug("%s: add 300ms delay before reset gpio set for dop playback case.\n",__func__);
-        msleep(300);
-    }  else {
-        msleep(100);
-   }
-
-#if defined(WORKAROUND_TICK_NOISE)
-    if( force_set_clamper_by_sleep_work )
-        wcd_set_clamp_on_mic(0);
-#endif /* WORKAROUND_TICK_NOISE */
-    es9218_reset_gpio_L();  // RESETb LOW move to Low Power Bypass mode
-#if defined(WORKAROUND_TICK_NOISE)
-
-    if( force_set_clamper_by_sleep_work )
-        wcd_set_clamp_on_mic(1);
-#endif /* WORKAROUND_TICK_NOISE */
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c && clk_source == 1) {
-        pr_info("%s() hifi_ext_mclk disable\n", __func__);
-        clk_disable_unprepare(hifi_ext_mclk);
-    }
-#endif
-    ///////////////////////////////
-    // sabre is now in low power bypass mode
-    ///////////////////////////////
-
-    //no longer required, lpb2hifione does not change hph_switch_gpio state
-    //es9218p_standby2lpb();  // Quiet transition from Standby mode to Low Power Bypass mode
-
-    return  0;
-}
-
-
-static int  es9218p_sabre_hifitwo2lpb(void)
-{
-    pr_info("%s()\n", __func__);
-
-    // if hifi to lpb pops, set R7[0] = 1 manually trigger mute before change amp mode
-    // u8 rv = 0;
-    // rv = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07); //WARNING this register read will slow down the transition! Would be faster to know what R7 value is already.
-    // es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, rv |= 0x01);
-    //
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_32, 0x00);      // amp mode core on, amp mode gpio set to trigger Core On
-
-    ///////////////////////////////
-    // sabre is now in LowFi mode controlled by GPIO2
-    ///////////////////////////////
-
-    if(g_dop_flag) {
-        pr_debug("%s: add 300ms delay before reset gpio set for dop playback case.\n",__func__);
-        msleep(300);
-    }
-
-#if defined(WORKAROUND_TICK_NOISE)
-    if( force_set_clamper_by_sleep_work )
-        wcd_set_clamp_on_mic(0);
-#endif /* WORKAROUND_TICK_NOISE */
-
-    es9218_reset_gpio_L();  // RESETb LOW move to Low Power Bypass mode
-#if defined(WORKAROUND_TICK_NOISE)
-    if( force_set_clamper_by_sleep_work )
-        wcd_set_clamp_on_mic(1);
-#endif /* WORKAROUND_TICK_NOISE */
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c && clk_source == 1) {
-        pr_info("%s() hifi_ext_mclk disable\n", __func__);
-        clk_disable_unprepare(hifi_ext_mclk);
-    }
+#if WORKAROUND_FOR_LOFI_POP == 1
+	if (rv & 1)
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_FILTER_BAND_SYSTEM_MUTE, rv |= 0x01);
 #endif
 
-    ///////////////////////////////
-    // sabre is now in low power bypass mode
-    ///////////////////////////////
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_AMP_CONFIG, 0x00);
 
-    //no longer required, lpb2hifione does not change hph_switch_gpio state
-    //es9218p_standby2lpb();  // Quiet transition from Standby mode to Low Power Bypass mode
+	/* SABRE is now in LoFi Mode. */
 
-    return  0;
+	if (g_dop_flag) {
+		pr_debug(
+			"%s: add 300ms delay before reset gpio set for dop playback case.\n",
+			__func__);
+		msleep(300);
+	}
+
+	es9218_reset_gpio_L();
+
+	/* SABRE is now in Low Power Bypass Mode. */
+	return 0;
 }
 
 static int es9218p_sabre_bypass2hifi(void)
 {
-    u8 reg;
-#ifdef ES9219C
-    int ret = 0;
-#endif
-    pr_info("%s() : enter. state = %s\n", __func__, power_state[es9218_power_state]);
+	uint8_t reg;
+	pr_info("%s() : enter. state = %s\n", __func__,
+		power_state[es9218_power_state]);
 
-    if ( es9218_power_state != ESS_PS_BYPASS ) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
-
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c && clk_source == 1) {
-        pr_info("%s() hifi_ext_mclk enable\n", __func__);
-        ret = clk_prepare_enable(hifi_ext_mclk);
-        if (ret)
-            pr_err("%s() : ext clk enable failed\n", __func__);
-    }
-#endif
-
-#ifdef WORKAROUND_FOR_CORNER_SAMPLES
-    es9218_reset_gpio_H();
-    mdelay(1);
-
-    /*
-     * workaround 1 : set RESETB high twice
-     * improvement for auto power on sequence inside ES921P chip
-     * it's expected to prevent i2c failure
-     */
-    es9218_reset_gpio_L();
-    mdelay(1);
-    es9218_reset_gpio_H();
-    mdelay(2);
-
-    /*
-     * workaround 2 : send a I2C cmd of soft_reset
-     * improvement for auto power on sequence inside ES921P chip
-     * it's expected to read default values of registers WELL
-     */
-#ifdef ES9219C
-
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-        if(clk_source > 1){
-
-            // I2S BCLK should be driven before executing the following function
-            es9219c_sabre_clk_source_set(clk_source, pll_setting);
-
-            i2c_smbus_write_byte_data(g_es9218_priv->i2c_client, ES9218P_REG_00, 0x01);
-            mdelay(1);
-
-        }
-        else{
-            i2c_smbus_write_byte_data(g_es9218_priv->i2c_client, ES9218P_REG_00, 0x01);
-            mdelay(1);
-
-            es9219c_sabre_clk_source_set(clk_source, pll_setting);
-        }
-    }
-    else{
-        i2c_smbus_write_byte_data(g_es9218_priv->i2c_client, ES9218P_REG_00, 0x01);
-        mdelay(1);
-    }
-#else /* ES9218P */
-    i2c_smbus_write_byte_data(g_es9218_priv->i2c_client, ES9218P_REG_00, 0x01);
-    mdelay(1);
-#endif /* ES9219C */
-
-#else /* Original code. Finally, we MUST use code below if ESS confirms that chips have no problems */
-    es9218_reset_gpio_H();
-    mdelay(2);
-#endif /* WORKAROUND_FOR_CORNER_SAMPLES */
-
-    ///////////////////////////////////////////////////////
-	// sabre is now in LowFi mode  (RESETb HIGH, GPIO2 LOW)
-	///////////////////////////////////////////////////////
-
-    if( call_common_init_registers == 1 ) {
-        call_common_init_registers = 0;
-
-        es9218p_initialize_registers(ESS_MODE_INIT);
-        pr_info("%s(): call es9218_common_init_registers.\n", __func__);
-    }
-
-    if (g_dop_flag == 0) { //  PCM
-        pr_info("%s(): PCM Format Reg Initial in es9218p_sabre_bypass2hifi() \n", __func__);
-        // re-init. PCM reg.
-        es9218p_initialize_registers(ESS_MODE_PCM);
-
-        // set bit width to ESS
-        es9218p_set_bit_width(es9218_bps, ESS_MODE_PCM);
-    }
-    else if (g_dop_flag > 0) { //  DOP
-        pr_info("%s(): DOP Format Reg Initial in es9218p_sabre_bypass2hifi() \n", __func__);
-
-#ifdef ENABLE_DOP_SOFT_MUTE
-        reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
-        reg = reg|0x01;
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, reg);
-        mdelay(2);
-#endif /* ENABLE_DOP_SOFT_MUTE */
-
-        // re-init. DoP reg.
-        es9218p_initialize_registers(ESS_MODE_DoP);
-
-        // set bit width to ESS
-        es9218p_set_bit_width(g_dop_flag, ESS_MODE_DoP);
-    }
-
-#ifdef ES9219C
-#ifdef DRE_ENABLE
-     if (g_es9218_priv->es9218_data->is_es9219c) {
-         es9219c_DRE_setting();
-     }
-#endif
-#endif
-
-#ifdef ES9218P_SYSFS
-    if(forced_headset_type != -1 && forced_headset_type != g_headset_type)
-        g_headset_type = forced_headset_type;
-#endif
-
-    es9218_set_thd(g_es9218_priv->i2c_client, g_headset_type);
-#if 0 /* CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER*/
-    es9218_sabre_cfg_custom_filter(&es9218_sabre_custom_ft[g_sabre_cf_num]);
-#endif
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_15, g_left_volume);     // set left channel digital volume level
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_16, g_right_volume);    // set right channel digital volume level
-
-    pr_info("%s() : g_left_volume = %d, g_right_volume = %d \n", __func__, g_left_volume, g_right_volume);
-
-    es9218_master_trim(g_es9218_priv->i2c_client, g_volume);                        // set master trim level
-
-#ifdef ES9218P_SYSFS
-    if(forced_avc_volume != -1 && forced_avc_volume != g_avc_volume)
-        g_avc_volume = forced_avc_volume;
-#endif
-
-#ifdef ES9219C
-#ifdef X_TALK_ENHANCEMENT_ENABLE
-	es9219c_crosstalk_enhancement();
-#endif
-	if (g_es9218_priv->es9218_data->is_es9219c) {
-	    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_03, 0x58);  // AVC to Min
-	} else {
-	    es9218_set_avc_volume(g_es9218_priv->i2c_client, g_avc_volume);                 // set analog volume control, must happen before amp start // 1113
+	if (es9218_power_state != ESS_PS_BYPASS) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
+		return 0;
 	}
+
+#if ES9218P_DEBUG == 1
+	es9218_reset_gpio_H();
+	mdelay(1);
+
+	/*
+	 * Set RESETB to twice to improve the automatic power-on sequence and
+	 * prevent I2C faliure.
+	 */
+	es9218_reset_gpio_L();
+	mdelay(1);
+	es9218_reset_gpio_H();
+	mdelay(2);
+
+	/*
+	 * Send an I2C soft reset cimmand to improve the automatic power-on
+	 * sequence and correctly read the default values of registers.
+	 */
+	i2c_smbus_write_byte_data(g_es9218_priv->i2c_client, ES9218P_SYSTEM_REG,
+				  0x01);
+	mdelay(1);
 #else
-	es9218_set_avc_volume(g_es9218_priv->i2c_client, g_avc_volume);                 // set analog volume control, must happen before amp start // 1113
+	es9218_reset_gpio_H();
+	mdelay(2);
 #endif
 
-    es9218p_sabre_amp_start(g_es9218_priv->i2c_client, g_headset_type);             // move to HiFi mode
+	/* SABRE is now in LoFi Mode. */
 
-    es9218_power_state = ESS_PS_HIFI;
+	if (call_common_init_registers == 1) {
+		call_common_init_registers = 0;
 
-    pr_info("%s() : exit. state = %s\n", __func__, power_state[es9218_power_state]);
+		es9218p_initialize_registers(ESS_MODE_INIT);
+		pr_info("%s(): call es9218_common_init_register.\n", __func__);
+	}
 
-    return 0;
+	if (g_dop_flag == 0) {
+		pr_info("%s(): PCM Format Reg Initial in es9218p_sabre_bypass2hifi() \n",
+			__func__);
+
+		/* Initialise registers for PCM playback. */
+		es9218p_initialize_registers(ESS_MODE_PCM);
+
+		/* Set the bit-width to an ESS-advised value. */
+		es9218_set_bit_width(es9218_bps, ESS_MODE_PCM);
+	} else if (g_dop_flag > 0) {
+		pr_info("%s(): DOP Format Reg Initial in es9218p_sabre_bypass2hifi() \n",
+			__func__);
+
+#if ENABLE_DOP_SOFT_MUTE == 1
+		reg = es9218_read_reg(g_es9218_priv->i2c_client,
+				      ES9218P_FILTER_BAND_SYSTEM_MUTE);
+		reg |= 0x01;
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_FILTER_BAND_SYSTEM_MUTE, reg);
+		mdelay(2);
+#endif
+
+		/* Initialise registers for DoP playback. */
+		es9218p_initialize_registers(ESS_MODE_DoP);
+
+		/* Set the bit-width to an ESS-advised value. */
+		es9218_set_bit_width(g_dop_flag, ESS_MODE_DoP);
+	}
+
+#if ES9218P_SYSFS == 1
+	if (forced_headset_type != -1 && forced_headset_type != g_headset_type)
+		g_headset_type = forced_headset_type;
+#endif
+
+	es9218_set_thd(g_es9218_priv->i2c_client, g_headset_type);
+#ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
+	es9218_sabre_cfg_custom_filter(&sabre_custom_ft[g_sabre_cf_num]);
+#endif
+
+	/* Set left and right channel digital volume levels. */
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_VOL1_CTRL,
+			 g_left_volume);
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_VOL2_CTRL,
+			 g_right_volume);
+
+	pr_info("%s() : g_left_volume = %d, g_right_volume = %d \n", __func__,
+		g_left_volume, g_right_volume);
+
+	/* Set master trim level. */
+	es9218_master_trim(g_es9218_priv->i2c_client, g_volume);
+
+#if ES9218P_SYSFS == 1
+	if (forced_avc_volume != -1 && forced_avc_volume != g_avc_volume)
+		g_avc_volume = forced_avc_volume;
+#endif
+
+	/* Set Analog Volume Control prior to starting the amp. */
+	es9218_set_avc_volume(g_es9218_priv->i2c_client, g_avc_volume);
+	/* Switch to HiFi Mode. */
+	es9218p_sabre_amp_start(g_es9218_priv->i2c_client, g_headset_type);
+
+	es9218_power_state = ESS_PS_HIFI;
+
+	pr_info("%s() : exit. state = %s\n", __func__,
+		power_state[es9218_power_state]);
+
+	return 0;
 }
 
 static int es9218p_sabre_hifi2lpb(void)
 {
-    if ( es9218_power_state < ESS_PS_HIFI ) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
-    pr_info("%s() : state = %s\n", __func__, power_state[es9218_power_state]);
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
 
-    es9218p_sabre_amp_stop(g_es9218_priv->i2c_client, g_headset_type);              // moves from either HiFi1 or HiFi2 to Low Power Bypass Mode
+		return 0;
+	}
+	pr_info("%s() : state = %s\n", __func__,
+		power_state[es9218_power_state]);
 
-    es9218_power_state = ESS_PS_BYPASS;
+	es9218p_sabre_amp_stop(g_es9218_priv->i2c_client, g_headset_type);
 
-    return 0;
+	es9218_power_state = ESS_PS_BYPASS;
+
+	return 0;
 }
 
-/*
- *  HiFi mode, playback is stopped or paused
+/**
+ * es9218_sabre_audio_idle() - Control idle behaviour during HiFi Mode.
+ *
+ * This occurs when playback is stopped or paused.
  */
 static int es9218_sabre_audio_idle(void)
 {
-    if ( es9218_power_state != ESS_PS_HIFI ) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
-    pr_info("%s() : state = %s\n", __func__, power_state[es9218_power_state]);
-    /*  Auto Mute disable   */
-    //es9218_write_reg(g_es9218_priv->i2c_client, ESS9218_02, 0x34);
+	if (es9218_power_state != ESS_PS_HIFI) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
 
-    es9218_power_state = ESS_PS_IDLE;
-    return 0;
+		return 0;
+	}
+	pr_info("%s() : state = %s\n", __func__,
+		power_state[es9218_power_state]);
+
+#if 0
+	es9218_write_reg(g_es9218_priv->i2c_client, ESS9218_02, 0x34);
+#endif
+
+	es9218_power_state = ESS_PS_IDLE;
+
+	return 0;
 }
 
 static int es9218_sabre_audio_active(void)
 {
-    if ( es9218_power_state != ESS_PS_IDLE ) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
-    pr_info("%s() : state = %s\n", __func__, power_state[es9218_power_state]);
+	if (es9218_power_state != ESS_PS_IDLE) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
 
-    es9218_power_state = ESS_PS_HIFI;
-    return 0;
+		return 0;
+	}
+	pr_info("%s() : state = %s\n", __func__,
+		power_state[es9218_power_state]);
+
+	es9218_power_state = ESS_PS_HIFI;
+
+	return 0;
 }
 
-/*
- *  Power up to bypass mode when headphone is plugged in
- *  Sabre DAC (ES9218) is still in power-down mode, but switch is on and sw position is at AUX/QC_CODEC.
- *  Thus, i2c link will not function as HiFi_RESET_N is still '0'.
+/**
+ * __es9218_sabre_headphone_on() - Power on and switch to Bypass Mode when
+ *                                 headphones are plugged in.
+ *
+ * SABRE is still powered down but the switch is on and the SW is positioned
+ * at AUX or QC_CODEC. Thus, the I2C link will not function as HiFi_RESET_N
+ * is still 0.
  */
 static int __es9218_sabre_headphone_on(void)
 {
-    pr_info("%s(): entry: state = %s\n", __func__, power_state[es9218_power_state]);
+	pr_info("%s(): entry: state = %s\n", __func__,
+		power_state[es9218_power_state]);
 
-    if (es9218_power_state == ESS_PS_CLOSE) {
-		// If sabre has been powered off, power it on
-        es9218_hph_switch_gpio_L();     // GPIO2 LOW - ESS recommended for quiet power on
-		es9218_reset_gpio_L();          //confirm RESETb LOW - ESS recommended for quiet power on
-        es9218_power_gpio_H();          // Power on, GPIO2
-        // Verify power on sequence?
+	/* If SABRE has been powered off, power it back on. */
+	if (es9218_power_state == ESS_PS_CLOSE) {
+		/* Set GPIO2 to LOW for a quiet power on. */
+		es9218_hph_switch_gpio_L();
+		/* Set RESETb to LOW for a quiet power on. */
+		es9218_reset_gpio_L();
+		/* Power on GPIO2. */
+		es9218_power_gpio_H();
 
-        //////////////////////////////////////////
-		//sabre is now powered on in Standby mode.
-		//////////////////////////////////////////
+		/* SABRE is now in Standby Mode. */
 
-        es9218p_standby2lpb();
+		es9218p_sabre_standby2lpb();
 
-        es9218_power_state = ESS_PS_BYPASS;
-        return 0;
-    } else if (es9218_power_state == ESS_PS_BYPASS && es9218_is_amp_on) {
-		// if sabre is already powered on and waiting in LPB mode, transition from LPB to HiFi depending on load detected
-        pr_info("%s() : state = %s , is_amp_on = %d \n",    __func__, power_state[es9218_power_state], es9218_is_amp_on);
-        // defesive code for usecase not calling es9218_startup
-        // calling es9218_startup depends on kinds of sound. for example,
-        // hifi has 1sec of standby time, after that es9218_startup is invoked.
-        // offload mp3 has 10sec of standby time, after that es9218_startup is invoked.
-        call_common_init_registers = 1;
+		es9218_power_state = ESS_PS_BYPASS;
 
-        cancel_delayed_work_sync(&g_es9218_priv->sleep_work);
-#if defined(CONFIG_ARCH_SM8150)
-        if(pm_qos_request_active(&req)) {
-            pr_info("%s(): pm qos active state. so, remove pm qos request", __func__);
-            pm_qos_remove_request(&req);
-        }
-#endif
-        // guanrantee engough time to check impedance of headphone before entering to hifi mode, which means
-        // that es9218p_sabre_bypass2hifi() is invoked after some delay like 250ms.
-        schedule_delayed_work(&g_es9218_priv->hifi_in_standby_work, msecs_to_jiffies(250));
-        pr_info("%s(): end calling es9218p_sabre_bypass2hifi() after 250ms \n", __func__);
-        return 1;
-    } else {
-        pr_err("%s() : state = %s , skip enabling EDO.\n",  __func__, power_state[es9218_power_state]);
-        return 0;
-    }
+		return 0;
+	} else if (es9218_power_state == ESS_PS_BYPASS && es9218_is_amp_on) {
+		/*
+		 * If SABRE is already powered on and waiting in LPB Mode, transition
+		 * from LPB to HiFi depending on the load detected.
+		 */
+		pr_info("%s() : state = %s , is_amp_on = %d \n", __func__,
+			power_state[es9218_power_state], es9218_is_amp_on);
 
-    pr_info("%s(): end \n", __func__);
+		/*
+		 * We call the common init registers for the side case that
+		 * es9218_startup() has not been called. This is because both HiFi Mode
+		 * and MP3 offloading both spend time in Standby Mode (1s and 10s,
+		 * respectively) and then invoke es9218_startup().
+		 */
+		call_common_init_registers = 1;
 
-    return 0;
+		cancel_delayed_work_sync(&g_es9218_priv->sleep_work);
+
+		if (pm_qos_request_active(&req)) {
+			pr_info("%s(): pm qos active state. so, remove pm qos request",
+				__func__);
+			pm_qos_remove_request(&req);
+		}
+
+		/* Guarantee enough time to check headphone impedance before we switch to HiFi Mode. */
+		schedule_delayed_work(&g_es9218_priv->hifi_in_standby_work,
+				      msecs_to_jiffies(250));
+		pr_info("%s(): end calling es9218p_sabre_bypass2hifi() after 250ms \n",
+			__func__);
+
+		return 1;
+	} else {
+		pr_err("%s() : state = %s , skip enabling EDO.\n", __func__,
+		       power_state[es9218_power_state]);
+
+		return 0;
+	}
+
+	pr_info("%s(): end \n", __func__);
+
+	return 0;
 }
 
-/*
- *  Power down when headphone is plugged out. This state is the same as system power-up state.
+/**
+ * __es9218_sabre_headphone_off() - Power down when the headphone is plugged out.
+ *
+ * This state is the same as system power up state.
  */
 static int __es9218_sabre_headphone_off(void)
 {
-    if ( es9218_power_state == ESS_PS_CLOSE) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
+	if (es9218_power_state == ESS_PS_CLOSE) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
 
-    cancel_delayed_work_sync(&g_es9218_priv->hifi_in_standby_work);
+		return 0;
+	}
 
-    if ( es9218_power_state != ESS_PS_BYPASS ||
-        es9218_power_state != ESS_PS_IDLE) {
-        es9218p_sabre_hifi2lpb(); // if power state indicates chip is in HiFi mode, move to Low Power Bypass
-    }
-    pr_info("%s() : state = %d\n", __func__, es9218_power_state);
+	cancel_delayed_work_sync(&g_es9218_priv->hifi_in_standby_work);
 
-    es9218p_lpb2standby();
+	/*
+	 * If the power state indicates that the chip is in HiFi Mode, move to LPB
+	 * Mode.
+	 */
+	if (es9218_power_state != ESS_PS_BYPASS ||
+	    es9218_power_state != ESS_PS_IDLE) {
+		es9218p_sabre_hifi2lpb();
+	}
+	pr_info("%s() : state = %d\n", __func__, es9218_power_state);
 
-    // power off when ess chis becomes shutdown
-    if( g_es9218_priv->es9218_data->always_power_on == false )
-        es9218_power_gpio_L();
+	es9218p_sabre_lpb2standby();
 
-    // set reset pin Low if reset gpio is high
-    if( __gpio_get_value(g_es9218_priv->es9218_data->reset_gpio) == 1 )
-        es9218_reset_gpio_L();
+	/* Power off when the ESS ship shuts down. */
+	if (g_es9218_priv->es9218_data->always_power_on == false)
+		es9218_power_gpio_L();
 
-    es9218_power_state = ESS_PS_CLOSE;
-    return 0;
+	/* Set the reset pin to Low if the reset gpio is set to high. */
+	if (__gpio_get_value(g_es9218_priv->es9218_data->reset_gpio) == 1)
+		es9218_reset_gpio_L();
+
+	es9218_power_state = ESS_PS_CLOSE;
+
+	return 0;
 }
 
-/*
- *  Power up to bypass mode when headphone is plugged in
- *  Sabre DAC (ES9018) is still in power-down mode, but switch is on and sw position is at AUX/QC_CODEC.
- *  Thus, i2c link will not function as HiFi_RESET_N is still '0'.
+/**
+ * es9218_sabre_headphone_on() - Power on and switch to Bypass Mode when
+ *                               headphones are plugged in.
+ *
+ * SABRE is still powered down but the switch is on and the SW is positioned
+ * at AUX or QC_CODEC. Thus, the I2C link will not function as HiFi_RESET_N
+ * is still 0.
  */
 int es9218_sabre_headphone_on(void)
 {
-    pr_info("%s() Called !! \n", __func__);
+	pr_info("%s() Called !! \n", __func__);
 
-    mutex_lock(&g_es9218_priv->power_lock);
-    __es9218_sabre_headphone_on();
-    mutex_unlock(&g_es9218_priv->power_lock);
-    return 0;
+	mutex_lock(&g_es9218_priv->power_lock);
+	__es9218_sabre_headphone_on();
+	mutex_unlock(&g_es9218_priv->power_lock);
+
+	return 0;
 }
 EXPORT_SYMBOL(es9218_sabre_headphone_on);
 
-/*
- *  Power down when headphone is plugged out. This state is the same as system power-up state.
+/**
+ * es9218_sabre_headphone_off() - Power down when the headphone is plugged out.
+ *
+ * This state is the same as system power up state.
  */
 int es9218_sabre_headphone_off(void)
 {
-    pr_info("%s() Called !! \n", __func__);
+	pr_info("%s() Called !! \n", __func__);
 
-    mutex_lock(&g_es9218_priv->power_lock);
-    __es9218_sabre_headphone_off();
-    mutex_unlock(&g_es9218_priv->power_lock);
-    return 0;
+	mutex_lock(&g_es9218_priv->power_lock);
+	__es9218_sabre_headphone_off();
+	mutex_unlock(&g_es9218_priv->power_lock);
+
+	return 0;
 }
 EXPORT_SYMBOL(es9218_sabre_headphone_off);
 
-int es9218_get_power_state(void){
-    return es9218_power_state;
-}
-
-static int es9218p_set_volume_rate(unsigned int sample_rate, unsigned int ess_mode)
-{
-    int ret = -1;
-
-    if( ess_mode == ESS_MODE_PCM ) {
-
-        /* as per sample rate, set volume rate. MAY add setting soft time start(REG#14) */
-        switch(sample_rate)
-        {
-            case 48000:
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_06, 0x44);
-                break;
-
-            default:
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_06, 0x43);
-                break;
-        }
-    } else if( ess_mode == ESS_MODE_DoP ) {
-    }
-
-    pr_info("%s() exit - setting volume rate for %d Hz is %s\n", __func__, sample_rate, !ret?"done":"failed");
-
-    return ret;
-
-}
-static int es9218p_set_sample_rate(unsigned int bit_width, unsigned int sample_rate, unsigned int ess_mode)
+static int es9218_set_volume_rate(unsigned int sample_rate,
+				  unsigned int ess_mode)
 {
 	int ret = -1;
-	u8 reg = 0;
 
-	if( ess_mode == ESS_MODE_PCM ) {
-		reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
-		if( (g_sabre_cf_num == 4  || g_sabre_cf_num == 5) && (reg & 0x80 )){
-			pr_info("%s set custom filter when g_sabre_cf_num is %d\n", __func__, g_sabre_cf_num);
-			es9218_sabre_cfg_custom_filter(&es9218_sabre_custom_ft[g_sabre_cf_num]);
-		}
+	/*
+	 * As per the sample rate, set the volume rate. We also need to set the
+	 * soft time start.
+	 */
+	if (ess_mode == ESS_MODE_PCM) {
 		switch (sample_rate) {
-			case 384000:
-				reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
-				if(g_sabre_cf_num == 8 || g_sabre_cf_num == 9){
-					reg &= ~0xE0;
-					reg = reg|0x48;
-				} else {
-					reg = reg|0x8;
-				}
-				pr_info("%s register_07:%x, sample_rate:%d\n", __func__,reg, sample_rate);
-				ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, reg);
-				reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_44);
-				reg = reg|0x01;
-				ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_44, reg);
-				break;
-			default :
-				reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
-				if(g_sabre_cf_num == 8 || g_sabre_cf_num == 9){
-					reg &= ~0xE8;
-					reg = reg|0x40;
-				} else {
-					reg &= ~0x8;
-				}
-				ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, reg);
-				pr_info("%s register_07:%x, sample_rate:%d\n", __func__, reg, sample_rate);
-				reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_44);
-				reg &= ~0x01;
-				ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_44, reg);
-				pr_info("%s register_44:%x\n", __func__, reg);
-				break;
+		case 44100:
+		case 48000:
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_DOP_VOL_RAMP_RATE, 0x44);
+			break;
+
+		default:
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_DOP_VOL_RAMP_RATE, 0x43);
+			break;
 		}
 	}
+
+	pr_info("%s() exit - setting volume rate for %d Hz is %s\n", __func__,
+		sample_rate, !ret ? "done" : "failed");
+
+	return ret;
+}
+static int es9218p_set_sample_rate(unsigned int bit_width,
+				   unsigned int sample_rate,
+				   unsigned int ess_mode)
+{
+	int ret = -1;
+	uint8_t reg = 0;
+
+	if (ess_mode == ESS_MODE_PCM) {
+		reg = es9218_read_reg(g_es9218_priv->i2c_client,
+				      ES9218P_FILTER_BAND_SYSTEM_MUTE);
+
+		if ((g_sabre_cf_num == 4 || g_sabre_cf_num == 5) &&
+		    (reg & 0x80)) {
+			pr_info("%s set custom filter when g_sabre_cf_num is %d\n",
+				__func__, g_sabre_cf_num);
+			es9218_sabre_cfg_custom_filter(
+				&sabre_custom_ft[g_sabre_cf_num]);
+		}
+
+		switch (sample_rate) {
+		case 352800:
+		case 384000:
+			reg = es9218_read_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FILTER_BAND_SYSTEM_MUTE);
+
+			if (g_sabre_cf_num == 8 || g_sabre_cf_num == 9) {
+				reg &= ~0xE0;
+				reg |= 0x48;
+			} else {
+				reg |= 0x8;
+			}
+
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_FILTER_BAND_SYSTEM_MUTE,
+					       reg);
+			pr_info("%s register_07:%x, sample_rate:%d\n", __func__,
+				reg, sample_rate);
+
+			reg = es9218_read_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FIR_CONFIG);
+			reg |= 0x01;
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_FIR_CONFIG, reg);
+			pr_info("%s register_44:%x\n", __func__, reg);
+			break;
+
+		default:
+			reg = es9218_read_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FILTER_BAND_SYSTEM_MUTE);
+
+			if (g_sabre_cf_num == 8 || g_sabre_cf_num == 9) {
+				reg &= ~0xE8;
+				reg |= 0x40;
+			} else {
+				reg &= ~0x8;
+			}
+
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_FILTER_BAND_SYSTEM_MUTE,
+					       reg);
+			pr_info("%s register_07:%x, sample_rate:%d\n", __func__,
+				reg, sample_rate);
+
+			reg = es9218_read_reg(g_es9218_priv->i2c_client,
+					      ES9218P_FIR_CONFIG);
+			reg &= ~0x01;
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_FIR_CONFIG, reg);
+			pr_info("%s register_44:%x\n", __func__, reg);
+			break;
+		}
+	}
+
 	return ret;
 }
 
-static int es9218p_set_bit_width(unsigned int bit_width, unsigned int ess_mode)
+static int es9218_set_bit_width(unsigned int bit_width, unsigned int ess_mode)
 {
-    int ret = -1;
-    u8  i2c_len_reg = 0;
-    u8  in_cfg_reg = 0;
+	int ret = -1;
+	uint8_t i2c_len_reg = 0;
+	uint8_t in_cfg_reg = 0;
 
-    if( ess_mode == ESS_MODE_PCM ) {
-        /*  Bit width(depth) Per Sec. Setting     */
-        switch (bit_width) {
-            case 16 :
-                i2c_len_reg = 0x0;
-                in_cfg_reg |= i2c_len_reg;
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_01, in_cfg_reg);
-                break;
+	if (ess_mode == ESS_MODE_PCM) {
+		switch (bit_width) {
+		case 16:
+			i2c_len_reg = 0x0;
+			in_cfg_reg |= i2c_len_reg;
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_INPUT_SELECT,
+					       in_cfg_reg);
+			break;
 
-            case 24 :
-            case 32 :
-            default :
-                i2c_len_reg = 0x80;
-                in_cfg_reg |= i2c_len_reg;
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_01, in_cfg_reg);
-                break;
-        }
-    } else if( ess_mode == ESS_MODE_DoP ) {
-        /*  BPS Setting     */
-        switch (bit_width) {
-            case 64 :
-#ifdef ENABLE_DOP_AUTO_MUTE
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_04, 0x05);	   // 0x01 : 170msec, 0x05 : 34msec
-                /*	Volume Rate */
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_06, 0x4E);
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_02, 0xF4);
-#endif /* ENABLE_DOP_AUTO_MUTE */
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_00, 0x04);   //  Reg #0
-                break;
+		case 24:
+		case 32:
+		default:
+			i2c_len_reg = 0x80;
+			in_cfg_reg |= i2c_len_reg;
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_INPUT_SELECT,
+					       in_cfg_reg);
+			break;
+		}
+	} else if (ess_mode == ESS_MODE_DoP) {
+		switch (bit_width) {
+		case 64:
+#if ENABLE_DOP_AUTO_MUTE == 1
+			/*
+			 * Set the automute timings to 170ms, and 34ms
+			 * respectively.
+			 */
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_AUTOMUTE_TIME, 0x05);
+			/* Adjust the volume rate for automute. */
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_DOP_VOL_RAMP_RATE, 0x4E);
+			/* Enable automute. */
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_AUTOMUTE_CONFIG, 0xF4);
+#endif
+			/* Set Registry 0 to the default HW value. */
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_SYSTEM_REG, 0x04);
+			break;
 
-            case 128 :
-            default :
-#ifdef ENABLE_DOP_AUTO_MUTE
-                /*	Automute Time					*/
-                /*	 0xFF : 0 msec ,	0x04 : 50 msec ,	0x02 : 100 msec ,	0x01 : 170 msec */
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_04, 0x05);	   // 0x01 : 170msec, 0x05 : 34msec
-                /*	Volume Rate */
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_06, 0x4E);
-                /*	Auto Mute enable	*/
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_02, 0xF4);
-#endif /* ENABLE_DOP_AUTO_MUTE */
-                ret = es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_00, 0x00);   //  Reg #0 : HW Default Value
-                break;
-        }
-    }
-    pr_info("%s() exit - setting %d bits width is %s\n", __func__, bit_width, !ret?"done":"failed");
+		case 128:
+		default:
+#if ENABLE_DOP_AUTO_MUTE == 1
+			/*
+			 * Set the automute timings to 170ms, and 34ms
+			 * respectively.
+			 */
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_AUTOMUTE_TIME, 0x05);
+			/* Adjust the volume rate for automute. */
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_DOP_VOL_RAMP_RATE, 0x4E);
+			/* Enable automute. */
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_AUTOMUTE_CONFIG, 0xF4);
+#endif
+			/* Set Registry 0 to the default HW value. */
+			ret = es9218_write_reg(g_es9218_priv->i2c_client,
+					       ES9218P_SYSTEM_REG, 0x00);
+			break;
+		}
+	}
 
-    return ret;
+	pr_info("%s() exit - setting %d bits width is %s\n", __func__,
+		bit_width, !ret ? "done" : "failed");
 
+	return ret;
 }
 
 static void es9218p_initialize_registers(unsigned int ess_mode)
 {
-    int i;
+	int i;
 
-    if( ess_mode == ESS_MODE_PCM ) {
-        for (i = 0 ; i < sizeof(es9218_PCM_init_register)/sizeof(es9218_PCM_init_register[0]) ; i++) {
-            es9218_write_reg(g_es9218_priv->i2c_client,
-                            es9218_PCM_init_register[i].num,
-                            es9218_PCM_init_register[i].value);
-        }
-    } else if( ess_mode == ESS_MODE_DoP ) {
-        for (i = 0 ; i < sizeof(es9218_DOP_init_register)/sizeof(es9218_DOP_init_register[0]) ; i++) {
-            es9218_write_reg(g_es9218_priv->i2c_client,
-                            es9218_DOP_init_register[i].num,
-                            es9218_DOP_init_register[i].value);
-        }
-    } else if( ess_mode == ESS_MODE_INIT ) {
-        for (i = 0 ; i < sizeof(es9218_common_init_registers)/sizeof(es9218_common_init_registers[0]) ; i++) {
-            es9218_write_reg(g_es9218_priv->i2c_client,
-                            es9218_common_init_registers[i].num,
-                            es9218_common_init_registers[i].value);
-#ifdef ES9219C
-            if (!g_es9218_priv->es9218_data->is_es9219c) { // for ES9218P
-                // ES9218P must set to : ES9218P_REG_21 = 0x0f
-                es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_21, 0x0f); //GPIO Input Selection
-            }
-#endif
-        }
-    }
+	if (ess_mode == ESS_MODE_PCM) {
+		for (i = 0; i < sizeof(es9218_pcm_init_register) /
+					sizeof(es9218_pcm_init_register[0]);
+		     i++) {
+			es9218_write_reg(g_es9218_priv->i2c_client,
+					 es9218_pcm_init_register[i].num,
+					 es9218_pcm_init_register[i].value);
+		}
+	} else if (ess_mode == ESS_MODE_DoP) {
+		for (i = 0; i < sizeof(es9218_dop_init_register) /
+					sizeof(es9218_dop_init_register[0]);
+		     i++) {
+			es9218_write_reg(g_es9218_priv->i2c_client,
+					 es9218_dop_init_register[i].num,
+					 es9218_dop_init_register[i].value);
+		}
+	} else if (ess_mode == ESS_MODE_INIT) {
+		for (i = 0; i < sizeof(es9218_common_init_register) /
+					sizeof(es9218_common_init_register[0]);
+		     i++) {
+			es9218_write_reg(g_es9218_priv->i2c_client,
+					 es9218_common_init_register[i].num,
+					 es9218_common_init_register[i].value);
+		}
+	}
 }
+
 static void es9218_sabre_hifi_in_standby_work(struct work_struct *work)
 {
-    mutex_lock(&g_es9218_priv->power_lock);
-    pr_info("%s() enter - go to hifi mode from standy mode status:%s, bps : %d , rate : %d\n",
-    __func__,
-    power_state[es9218_power_state],
-    es9218_bps,
-    es9218_rate);
+	mutex_lock(&g_es9218_priv->power_lock);
 
-    es9218p_sabre_bypass2hifi();
+	pr_info("%s() enter - go to hifi mode from standy mode status:%s, bps : %d , rate : %d\n",
+		__func__, power_state[es9218_power_state], es9218_bps,
+		es9218_rate);
 
-    if( g_dop_flag == 0 ) { // PCM
-        // set bit width to ESS
-        es9218p_set_bit_width(es9218_bps, ESS_MODE_PCM);
-        es9218p_set_sample_rate(es9218_bps, es9218_rate, ESS_MODE_PCM);
-        // set volume rate to ESS
-        es9218p_set_volume_rate(es9218_rate, ESS_MODE_PCM);
-    } else if (g_dop_flag > 0){ // DoP
-        // set bit width to ESS
-        es9218p_set_bit_width(g_dop_flag, ESS_MODE_DoP);
+	es9218p_sabre_bypass2hifi();
 
-        // DoP has teardown mode in AudioFWK, so shutdown() is already invoked.
-        // workaournd - forced change mode to idle in DoP mode
-        es9218_sabre_audio_idle();
-        pr_info("%s() force change a mode status:%s\n", __func__, power_state[es9218_power_state]);
+	if (g_dop_flag == 0) { // PCM
+		/* Set the bit-width to an ESS-advised value for PCM playback. */
+		es9218_set_bit_width(es9218_bps, ESS_MODE_PCM);
+		es9218p_set_sample_rate(es9218_bps, es9218_rate, ESS_MODE_PCM);
+		/* Set the volume rate to an ESS-advised value. */
+		es9218_set_volume_rate(es9218_rate, ESS_MODE_PCM);
+	} else if (g_dop_flag > 0) {
+		/* Set the bit-width to an ESS-advised value for DoP playback. */
+		es9218_set_bit_width(g_dop_flag, ESS_MODE_DoP);
 
-    }
-
-    pr_info("%s() exit - go to hifi mode from standy mode status:%s\n", __func__, power_state[es9218_power_state]);
-    mutex_unlock(&g_es9218_priv->power_lock);
-    return;
-}
-
-static void es9218_sabre_sleep_work (struct work_struct *work)
-{
-	__pm_wakeup_event(&wl_sleep, jiffies_to_msecs(2000));
-    mutex_lock(&g_es9218_priv->power_lock);
-    if (es9218_power_state == ESS_PS_IDLE) {
-        pr_info("%s(): sleep_work state is %s running \n", __func__, power_state[es9218_power_state]);
-
-#if defined(WORKAROUND_TICK_NOISE)
-        force_set_clamper_by_sleep_work = 1;
-#endif /* WORKAROUND_TICK_NOISE */
-
-        es9218p_sabre_hifi2lpb();
-
-#if defined(WORKAROUND_TICK_NOISE)
-        force_set_clamper_by_sleep_work = 0;
-#endif /* WORKAROUND_TICK_NOISE */
-
-    }
-    else {
-        pr_info("%s(): sleep_work state is %s skip operation \n", __func__, power_state[es9218_power_state]);
-    }
-
-    es9218_is_amp_on = 0;
-#if defined(CONFIG_ARCH_SM8150)
-    if(pm_qos_request_active(&req)) {
-        pr_info("%s(): pm qos active state. so, remove pm qos request", __func__);
-        pm_qos_remove_request(&req);
-    }
-#endif
-    mutex_unlock(&g_es9218_priv->power_lock);
-    return;
-}
-
-static int es9218_power_state_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-    pr_debug("%s(): power state = %d\n", __func__, es9218_power_state);
-
-    ucontrol->value.enumerated.item[0] = es9218_power_state;
-
-    pr_debug("%s(): ucontrol = %d\n", __func__, ucontrol->value.enumerated.item[0]);
-
-    return 0;
-}
-
-static int es9218_power_state_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-    int ret=0;
-
-    pr_debug("%s():ucontrol = %d, power state=%d\n", __func__, ucontrol->value.enumerated.item[0], es9218_power_state);
-
-    if (es9218_power_state == ucontrol->value.enumerated.item[0]) {
-        pr_info("%s():no power state change\n", __func__);
-    }
-
-    //"Open", "Close","Bypass","Hifi","Idle","Active","PowerHigh","PowerLow","HphHigh","HphLow"
-    switch(ucontrol->value.enumerated.item[0]) {
-        case 0:
-            __es9218_sabre_headphone_on();
-            break;
-        case 1:
-            __es9218_sabre_headphone_off();
-            break;
-        case 2:
-            es9218p_sabre_hifi2lpb();
-            break;
-        case 3:
-            es9218p_sabre_bypass2hifi();
-            break;
-        case 4:
-            es9218_sabre_audio_idle();
-            break;
-        case 5:
-            es9218_sabre_audio_active();
-            break;
-        case 6:
-            es9218_reset_gpio_H();
-            break;
-        case 7:
-            es9218_reset_gpio_L();
-            break;
-        case 8:
-            es9218_hph_switch_gpio_H();
-            break;
-        case 9:
-            es9218_hph_switch_gpio_L();
-            break;
-        default:
-            break;
-
-    }
-    return ret;
-}
-
-
-static int es9218_normal_harmonic_comp_put_left(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol) {
-    int i =0 ;
-
-    for( i =0  ;  i < 4  ; i ++ ) {
-        normal_harmonic_comp_left[i] = (u8) ucontrol->value.integer.value[i];
-    }
-    return 0 ;
-}
-static int es9218_advance_harmonic_comp_put_left(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol) {
-    int i =0;
-
-    for( i =0  ;  i < 4  ; i ++ ) {
-        advance_harmonic_comp_left[i] = (u8) ucontrol->value.integer.value[i];
-    }
-    return 0;
-}
-static int es9218_aux_harmonic_comp_put_left(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol) {
-    int i =0;
-
-    for( i =0  ;  i < 4  ; i ++ ) {
-        aux_harmonic_comp_left[i] = (u8) ucontrol->value.integer.value[i];
-    }
-    return 0;
-}
-static int es9218_normal_harmonic_comp_put_right(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol) {
-    int i =0 ;
-
-    for( i =0  ;  i < 4  ; i ++ ) {
-        normal_harmonic_comp_right[i] = (u8) ucontrol->value.integer.value[i];
-    }
-    return 0 ;
-}
-static int es9218_advance_harmonic_comp_put_right(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol) {
-    int i =0;
-
-    for( i =0  ;  i < 4  ; i ++ ) {
-        advance_harmonic_comp_right[i] = (u8) ucontrol->value.integer.value[i];
-    }
-    return 0;
-}
-static int es9218_aux_harmonic_comp_put_right(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol) {
-    int i =0;
-
-    for( i =0  ;  i < 4  ; i ++ ) {
-        aux_harmonic_comp_right[i] = (u8) ucontrol->value.integer.value[i];
-    }
-    return 0;
-}
-
-static int es9218_headset_type_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-    ucontrol->value.integer.value[0] = g_headset_type;
-
-    pr_info("%s(): type = %d \n", __func__, g_headset_type);
-
-    return 0;
-}
-
-static int es9218_headset_type_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-    int value = 0;
-
-    value = (int)ucontrol->value.integer.value[0];
-
-    if(value != 0) {
-#ifdef ES9218P_SYSFS
-        if(forced_headset_type != -1 && forced_headset_type != g_headset_type)
-            g_headset_type = forced_headset_type;
-        else
-#endif
-        g_headset_type = value;
-        pr_info("%s(): type = %d, state = %s\n ", __func__, value, power_state[es9218_power_state]);
-    } else {
-        /*
-         * In mixer_paths.xml, 0 stands for no headset.
-         ** init ** : <ctl name="Es9018 HEADSET TYPE" value="0" />
-         * normal   : <ctl name="Es9018 HEADSET TYPE" value="1" />
-         * advanced : <ctl name="Es9018 HEADSET TYPE" value="2" />
-         * aux      : <ctl name="Es9018 HEADSET TYPE" value="3" />
-        */
-        pr_err("%s() : invalid headset type = %d, state = %s\n", __func__, value, power_state[es9218_power_state]);
-        return 0;
+		/*
+		 * DoP has teardown mode in AudioFWK, so shutdown() is already invoked.
+		 * Therefore, we forced switch to Idle Mode when for DoP playback.
+		 */
+		es9218_sabre_audio_idle();
+		pr_info("%s() force change a mode status:%s\n", __func__,
+			power_state[es9218_power_state]);
 	}
 
+	pr_info("%s() exit - go to hifi mode from standy mode status:%s\n",
+		__func__, power_state[es9218_power_state]);
 
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_debug("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
-
-    es9218_set_thd(g_es9218_priv->i2c_client, g_headset_type);
-    // es9218p_sabre_bypass2hifi();  // unnecessary code, but remain it as histroy.
-
-    return 0;
-}
-
-static int es9218_auto_mute_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-    ucontrol->value.integer.value[0] = g_auto_mute_flag;
-
-    pr_debug("%s(): type = %d \n", __func__, g_auto_mute_flag);
-
-    return 0;
-}
-
-static int es9218_auto_mute_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-    int ret = 0 ;
-
-    g_auto_mute_flag = (int)ucontrol->value.integer.value[0];
-
-    pr_debug("%s(): g_auto_mute_flag = %d \n", __func__, g_auto_mute_flag);
-
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_err("%s() : return = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
-
-    if(g_auto_mute_flag) {
-        pr_debug("%s(): Disable g_auto_mute_flag = %d \n", __func__, g_auto_mute_flag);
-        //es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_02,0x34); // #02  : Automute Config Disable
-    } else {
-        /*  BPS Setting     */
-        switch (es9218_bps) {
-            case 24 :
-            case 32 :
-                switch  (es9218_rate) {
-                    case 96000  :
-                    case 192000 :
-                        /*  Auto Mute enable    */
-                        pr_debug("%s(): Enable g_auto_mute_flag = %d \n", __func__, g_auto_mute_flag);
-                        //es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_02,0xF4); // #02  : Automute Config Enable
-                    break;
-                }
-        }
-    }
-    return ret;
-}
-#ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
-static int lge_ess_digital_filter_setting_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-    ucontrol->value.integer.value[0] = g_sabre_cf_num;
-    pr_info("%s(): ucontrol = %d\n", __func__, g_sabre_cf_num);
-    return 0;
-}
-
-static int lge_ess_digital_filter_setting_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-    int ret = 0;
-
-    g_sabre_cf_num = (int)ucontrol->value.integer.value[0];
-    pr_info("%s():filter num= %d\n", __func__, g_sabre_cf_num);
-    return ret;
-}
-
-
-
-
-static int get_fade_count_define(void)
-{
-    if(fade_count_debug_param == 99) {
-	return FADE_INOUT_COUNT;
-    } else {
-	return fade_count_debug_param;
-    }
-
-}
-static int get_fade_term_define(void)
-{
-    if(fade_term_debug_param == 99) {
-	return FADE_INOUT_TERM;
-    } else {
-	return fade_term_debug_param;
-    }
-
-}
-
-static void mute_work_function(struct work_struct *work)
-{
-
-	int result = 0;
-
-        result = cancel_delayed_work(mute_work);
-	pr_info("%s(): called volume direction %d, g_fade_count %d, cancle_delayed_work result %d , g_left_fade_vol %d, g_right_fade_vol %d ",
-		       	__func__, fade_direction, g_fade_count, result, g_left_fade_vol, g_right_fade_vol);
-
-	if(fade_direction == VOLUME_DOWN) {
-		if( g_fade_count != 0 ) {
-			g_fade_count--;
-//			pr_info("%s(): case 1 called volume direction %d, g_fade_count %d\n", __func__, fade_direction, g_fade_count);
-	                g_left_fade_vol = g_left_fade_vol + g_left_fade_vol_per_step;
-		        g_right_fade_vol = g_right_fade_vol + g_right_fade_vol_per_step;
-
-			if(g_left_fade_vol > 0xff)
-			    g_left_fade_vol = 0xff;
-		        if(g_right_fade_vol > 0xff)
-			    g_right_fade_vol = 0xff;
-
-			es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_15, g_left_fade_vol);
-                        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_16, g_right_fade_vol);
-		} else {
-//			pr_info("%s(): case 2 called volume g_fade_count %d\n", __func__, g_fade_count);
-			if(g_sabre_cf_num == SHORT_FILTER)
-			    g_volume = 0;
-			else if(g_sabre_cf_num == SHARP_FILTER)
-			    g_volume = 4;
-			else
-			    g_volume = 2;
-
-                        es9218_master_trim(g_es9218_priv->i2c_client, g_volume);
-			fade_direction = VOLUME_UP;
-		}
-
-                queue_delayed_work(mute_workqueue , mute_work, msecs_to_jiffies(get_fade_term_define()) );
-	} else {
-		if( g_fade_count < (get_fade_count_define() ) ) {
-//			pr_info("%s(): case 3 called volume g_fade_count %d g_left_fade_vol %d\n", __func__, g_fade_count, g_left_fade_vol);
-			g_fade_count++;
-			g_left_fade_vol = g_left_fade_vol - g_left_fade_vol_per_step;
-			g_right_fade_vol = g_right_fade_vol - g_right_fade_vol_per_step;
-
-       			if(g_left_fade_vol < g_left_volume)
-			    g_left_fade_vol = g_left_volume;
-		        if(g_right_fade_vol < g_right_volume)
-			    g_right_fade_vol = g_right_volume;
-
-			es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_15, g_left_fade_vol);
-                        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_16, g_right_fade_vol);
-                        queue_delayed_work(mute_workqueue , mute_work, msecs_to_jiffies(get_fade_term_define()) ); // 100 msec
-		} else {
-            es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_15, g_left_volume);
-            es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_16, g_right_volume);
-
-			pr_info("%s(): case 4 called volume direction %d, g_fade_count %d\n", __func__, fade_direction, g_fade_count);
-		}
-	}
-
+	mutex_unlock(&g_es9218_priv->power_lock);
 
 	return;
 }
 
-static int lge_ess_fade_inout_put(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
+static void es9218_sabre_sleep_work(struct work_struct *work)
 {
+	__pm_wakeup_event(&wl_sleep, jiffies_to_msecs(2000));
 
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
-    if(lge_ess_fade_inout_init != true) {
-        lge_ess_fade_inout_init = true;
-        pr_info("%s(): fade in out work queue initialize. \n", __func__);
+	mutex_lock(&g_es9218_priv->power_lock);
 
-        mute_workqueue = create_workqueue("mute_workqueue");
-        mute_work = devm_kzalloc(&g_es9218_priv->i2c_client->dev, sizeof(struct delayed_work), GFP_KERNEL);
-        if(!mute_work) {
-            lge_ess_fade_inout_init = false;
-            pr_err("%s() : devm_kzalloc failed!!\n", __func__);
-            return 0;
-        }
+	if (es9218_power_state == ESS_PS_IDLE) {
+		pr_info("%s(): sleep_work state is %s running \n", __func__,
+			power_state[es9218_power_state]);
 
-        INIT_DELAYED_WORK(mute_work, mute_work_function);
-    }
+		es9218p_sabre_hifi2lpb();
+	} else {
+		pr_info("%s(): sleep_work state is %s skip operation \n",
+			__func__, power_state[es9218_power_state]);
+	}
 
-    if(work_pending( &mute_work->work )) {
-        pr_info("%s(): previous fade in/out is not yet finished. \n", __func__);
-//        return 0;
-        g_fade_count = get_fade_count_define();
-        fade_direction = VOLUME_DOWN;
-    } else {
-        g_fade_count = get_fade_count_define();
-        g_left_fade_vol = g_left_volume;
-        g_right_fade_vol = g_right_volume;
-        g_left_fade_vol_per_step = (0xff - g_left_volume) / g_fade_count;
-        g_right_fade_vol_per_step = (0xff - g_right_volume) / g_fade_count;
-        fade_direction = VOLUME_DOWN;
-        pr_info("%s(): start fade in/out g_left_volume %d, g_right_volume %d \n", __func__, g_left_volume, g_right_volume);
-    }
-    queue_delayed_work(mute_workqueue , mute_work, msecs_to_jiffies(get_fade_term_define()) ); // ?? msec
+	es9218_is_amp_on = 0;
+
+	if (pm_qos_request_active(&req)) {
+		pr_info("%s(): pm qos active state. so, remove pm qos request",
+			__func__);
+		pm_qos_remove_request(&req);
+	}
+
+	mutex_unlock(&g_es9218_priv->power_lock);
+
+	return;
+}
+
+static int es9218_power_state_get(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
+{
+	pr_debug("%s(): power state = %d\n", __func__, es9218_power_state);
+
+	ucontrol->value.enumerated.item[0] = es9218_power_state;
+	pr_debug("%s(): ucontrol = %d\n", __func__,
+		 ucontrol->value.enumerated.item[0]);
+
+	return 0;
+}
+
+static int es9218_power_state_put(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
+{
+	int ret = 0;
+
+	pr_debug("%s():ucontrol = %d, power state=%d\n", __func__,
+		 ucontrol->value.enumerated.item[0], es9218_power_state);
+
+	if (es9218_power_state == ucontrol->value.enumerated.item[0]) {
+		pr_info("%s():no power state change\n", __func__);
+	}
+
+	switch (ucontrol->value.enumerated.item[0]) {
+	/* Open */
+	case 0:
+		__es9218_sabre_headphone_on();
+		break;
+	/* Close */
+	case 1:
+		__es9218_sabre_headphone_off();
+		break;
+	/* Bypass */
+	case 2:
+		es9218p_sabre_hifi2lpb();
+		break;
+	/* HiFi */
+	case 3:
+		es9218p_sabre_bypass2hifi();
+		break;
+	/* Idle */
+	case 4:
+		es9218_sabre_audio_idle();
+		break;
+	/* Active */
+	case 5:
+		es9218_sabre_audio_active();
+		break;
+	/* High Power */
+	case 6:
+		es9218_reset_gpio_H();
+		break;
+	/* Low Power */
+	case 7:
+		es9218_reset_gpio_L();
+		break;
+	/* HPH High */
+	case 8:
+		es9218_hph_switch_gpio_H();
+		break;
+	/* HPH Low */
+	case 9:
+		es9218_hph_switch_gpio_L();
+		break;
+	default:
+		break;
+	}
+
+	return ret;
+}
+
+static int
+es9218_normal_harmonic_comp_put_left(struct snd_kcontrol *kcontrol,
+				     struct snd_ctl_elem_value *ucontrol)
+{
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		normal_harmonic_comp_left[i] =
+			(uint8_t)ucontrol->value.integer.value[i];
+	}
+
+	return 0;
+}
+static int
+es9218_advance_harmonic_comp_put_left(struct snd_kcontrol *kcontrol,
+				      struct snd_ctl_elem_value *ucontrol)
+{
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		advance_harmonic_comp_left[i] =
+			(uint8_t)ucontrol->value.integer.value[i];
+	}
+
+	return 0;
+}
+static int
+es9218_aux_harmonic_comp_put_left(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
+{
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		aux_harmonic_comp_left[i] =
+			(uint8_t)ucontrol->value.integer.value[i];
+	}
+
+	return 0;
+}
+static int
+es9218_normal_harmonic_comp_put_right(struct snd_kcontrol *kcontrol,
+				      struct snd_ctl_elem_value *ucontrol)
+{
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		normal_harmonic_comp_right[i] =
+			(uint8_t)ucontrol->value.integer.value[i];
+	}
+
+	return 0;
+}
+static int
+es9218_advance_harmonic_comp_put_right(struct snd_kcontrol *kcontrol,
+				       struct snd_ctl_elem_value *ucontrol)
+{
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		advance_harmonic_comp_right[i] =
+			(uint8_t)ucontrol->value.integer.value[i];
+	}
+
+	return 0;
+}
+static int
+es9218_aux_harmonic_comp_put_right(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		aux_harmonic_comp_right[i] =
+			(uint8_t)ucontrol->value.integer.value[i];
+	}
+
+	return 0;
+}
+
+static int es9218_headset_type_get(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] = g_headset_type;
+
+	pr_info("%s(): type = %d \n", __func__, g_headset_type);
+
+	return 0;
+}
+
+static int es9218_headset_type_put(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	int value = (int)ucontrol->value.integer.value[0];
+
+	if (value != 0) {
+#if ES9218P_SYSFS == 1
+		if (forced_headset_type != -1 &&
+		    forced_headset_type != g_headset_type)
+			g_headset_type = forced_headset_type;
+		else
+#else
+		if (1)
+#endif
+			g_headset_type = value;
+		pr_info("%s(): type = %d, state = %s\n ", __func__, value,
+			power_state[es9218_power_state]);
+	} else {
+		/*
+		 * The value of the mixer control "Es9018 HEADSET TYPE" is defined by
+		 * the following modes:
+		 *
+		 * 0 -> No headphone or device has been plugged in.
+		 * 1 -> A "normal" (<=50RZ) headphone has been plugged in.
+		 * 2 -> A "high impedance" (50RZ-600RZ) headphone has been plugged in.
+		 * 3 -> An "AUX" device (>600RZ) has been plugged in.
+		 */
+		pr_err("%s() : invalid headset type = %d, state = %s\n",
+		       __func__, value, power_state[es9218_power_state]);
+
+		return 0;
+	}
+
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_debug("%s() : invalid state = %s\n", __func__,
+			 power_state[es9218_power_state]);
+
+		return 0;
+	}
+
+	es9218_set_thd(g_es9218_priv->i2c_client, g_headset_type);
+
+	return 0;
+}
+
+static int es9218_auto_mute_get(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] = g_auto_mute_flag;
+	pr_debug("%s(): type = %d \n", __func__, g_auto_mute_flag);
+
+	return 0;
+}
+
+static int es9218_auto_mute_put(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	int ret = 0;
+
+	g_auto_mute_flag = (int)ucontrol->value.integer.value[0];
+
+	pr_debug("%s(): g_auto_mute_flag = %d \n", __func__, g_auto_mute_flag);
+
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_err("%s() : return = %s\n", __func__,
+		       power_state[es9218_power_state]);
+
+		return ret;
+	}
+
+	if (g_auto_mute_flag) {
+		pr_debug("%s(): Disable g_auto_mute_flag = %d \n", __func__,
+			 g_auto_mute_flag);
+#if 0
+		es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_AUTOMUTE_CONFIG,0x34);
+#endif
+	} else {
+		/* Set the Bits Per Second. */
+		switch (es9218_bps) {
+		case 24:
+		case 32:
+			switch (es9218_rate) {
+			case 96000:
+			case 192000:
+				/* Enable automute. */
+				pr_debug(
+					"%s(): Enable g_auto_mute_flag = %d \n",
+					__func__, g_auto_mute_flag);
+#if 0
+				es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_AUTOMUTE_CONFIG,0xF4);
+#endif
+				break;
+			}
+		}
+	}
+
+	return ret;
+}
+
+#ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
+static int
+lge_ess_digital_filter_setting_get(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] = g_sabre_cf_num;
+	pr_info("%s(): ucontrol = %d\n", __func__, g_sabre_cf_num);
+
+	return 0;
+}
+
+static int
+lge_ess_digital_filter_setting_put(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	g_sabre_cf_num = (int)ucontrol->value.integer.value[0];
+	pr_info("%s():filter num= %d\n", __func__, g_sabre_cf_num);
+
+	return 0;
+}
+
+static int lge_ess_get_fade_count(void)
+{
+	if (fade_count_debug_param == 99)
+		return FADE_INOUT_COUNT;
+	else
+		return fade_count_debug_param;
+}
+
+static int lge_ess_get_fade_term(void)
+{
+	if (fade_term_debug_param == 99)
+		return FADE_INOUT_TERM;
+	else
+		return fade_term_debug_param;
+}
+
+static void mute_work_function(struct work_struct *work)
+{
+	int result = cancel_delayed_work(mute_work);
+	pr_info("%s(): called volume direction %d, g_fade_count %d, cancle_delayed_work result %d , g_left_fade_vol %d, g_right_fade_vol %d ",
+		__func__, fade_direction, g_fade_count, result, g_left_fade_vol,
+		g_right_fade_vol);
+
+	if (fade_direction == VOLUME_DOWN) {
+		if (g_fade_count != 0) {
+			g_fade_count--;
+			pr_debug(
+				"%s(): case 1 called volume direction %d, g_fade_count %d\n",
+				__func__, fade_direction, g_fade_count);
+
+			g_left_fade_vol =
+				g_left_fade_vol + g_left_fade_vol_per_step;
+			g_right_fade_vol =
+				g_right_fade_vol + g_right_fade_vol_per_step;
+
+			if (g_left_fade_vol > 0xff)
+				g_left_fade_vol = 0xff;
+			if (g_right_fade_vol > 0xff)
+				g_right_fade_vol = 0xff;
+
+			es9218_write_reg(g_es9218_priv->i2c_client,
+					 ES9218P_VOL1_CTRL, g_left_fade_vol);
+			es9218_write_reg(g_es9218_priv->i2c_client,
+					 ES9218P_VOL2_CTRL, g_right_fade_vol);
+		} else {
+			pr_debug("%s(): case 2 called volume g_fade_count %d\n",
+				 __func__, g_fade_count);
+
+			if (g_sabre_cf_num == SHORT_FILTER)
+				g_volume = 0;
+			else if (g_sabre_cf_num == SHARP_FILTER)
+				g_volume = 4;
+			else
+				g_volume = 2;
+
+			es9218_master_trim(g_es9218_priv->i2c_client, g_volume);
+			fade_direction = VOLUME_UP;
+		}
+
+		queue_delayed_work(mute_workqueue, mute_work,
+				   msecs_to_jiffies(lge_ess_get_fade_term()));
+	} else {
+		if (g_fade_count < (lge_ess_get_fade_count())) {
+			g_fade_count++;
+			pr_debug(
+				"%s(): case 3 called volume g_fade_count %d g_left_fade_vol %d\n",
+				__func__, g_fade_count, g_left_fade_vol);
+
+			g_left_fade_vol =
+				g_left_fade_vol - g_left_fade_vol_per_step;
+			g_right_fade_vol =
+				g_right_fade_vol - g_right_fade_vol_per_step;
+
+			if (g_left_fade_vol < g_left_volume)
+				g_left_fade_vol = g_left_volume;
+			if (g_right_fade_vol < g_right_volume)
+				g_right_fade_vol = g_right_volume;
+
+			es9218_write_reg(g_es9218_priv->i2c_client,
+					 ES9218P_VOL1_CTRL, g_left_fade_vol);
+			es9218_write_reg(g_es9218_priv->i2c_client,
+					 ES9218P_VOL2_CTRL, g_right_fade_vol);
+
+			queue_delayed_work(
+				mute_workqueue, mute_work,
+				msecs_to_jiffies(lge_ess_get_fade_term()));
+		} else {
+			es9218_write_reg(g_es9218_priv->i2c_client,
+					 ES9218P_VOL1_CTRL, g_left_volume);
+			es9218_write_reg(g_es9218_priv->i2c_client,
+					 ES9218P_VOL2_CTRL, g_right_volume);
+
+			pr_debug(
+				"%s(): case 4 called volume direction %d, g_fade_count %d\n",
+				__func__, fade_direction, g_fade_count);
+		}
+	}
+
+	return;
+}
+
+static int lge_ess_fade_inout_put(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
+{
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
+
+		return 0;
+	}
+	if (lge_ess_fade_inout_init != true) {
+		lge_ess_fade_inout_init = true;
+		pr_info("%s(): fade in out work queue initialize. \n",
+			__func__);
+
+		mute_workqueue = create_workqueue("mute_workqueue");
+		mute_work =
+			devm_kzalloc(&g_es9218_priv->i2c_client->dev,
+				     sizeof(struct delayed_work), GFP_KERNEL);
+
+		if (!mute_work) {
+			lge_ess_fade_inout_init = false;
+			pr_err("%s() : devm_kzalloc failed!!\n", __func__);
+
+			return 0;
+		}
+
+		INIT_DELAYED_WORK(mute_work, mute_work_function);
+	}
+
+	if (work_pending(&mute_work->work)) {
+		pr_info("%s(): previous fade in/out is not yet finished. \n",
+			__func__);
+
+		g_fade_count = lge_ess_get_fade_count();
+		fade_direction = VOLUME_DOWN;
+	} else {
+		g_fade_count = lge_ess_get_fade_count();
+		g_left_fade_vol = g_left_volume;
+		g_right_fade_vol = g_right_volume;
+		g_left_fade_vol_per_step =
+			(0xff - g_left_volume) / g_fade_count;
+		g_right_fade_vol_per_step =
+			(0xff - g_right_volume) / g_fade_count;
+		fade_direction = VOLUME_DOWN;
+
+		pr_info("%s(): start fade in/out g_left_volume %d, g_right_volume %d \n",
+			__func__, g_left_volume, g_right_volume);
+	}
+
+	queue_delayed_work(mute_workqueue, mute_work,
+			   msecs_to_jiffies(lge_ess_get_fade_term()));
 
 	return 0;
 }
 
 static int lge_ess_fade_inout_get(struct snd_kcontrol *kcontrol,
-		struct snd_ctl_elem_value *ucontrol)
+				  struct snd_ctl_elem_value *ucontrol)
 {
 	return 0;
 }
 #endif
+
 static int es9218_avc_volume_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				 struct snd_ctl_elem_value *ucontrol)
 {
-    ucontrol->value.integer.value[0] = g_avc_volume;
+	ucontrol->value.integer.value[0] = g_avc_volume;
+	pr_debug("%s(): AVC Volume= -%d db\n", __func__, g_avc_volume);
 
-    pr_debug("%s(): AVC Volume= -%d db\n", __func__, g_avc_volume);
-
-    return 0;
+	return 0;
 }
 
 static int es9218_avc_volume_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				 struct snd_ctl_elem_value *ucontrol)
 {
-    int ret = 0;
-    int vol = 25;
+	int ret = 0;
+	int vol = 25;
 
-    /* A range of g_avc_volume is from 0 to 24. */
-    vol = (int)ucontrol->value.integer.value[0];
+	/* The range of g_avc_volume is from 0 to 24. */
+	vol = (int)ucontrol->value.integer.value[0];
 
-    if (vol >= sizeof(avc_vol_tbl)/sizeof(avc_vol_tbl[0])) {
-        pr_err("%s() : Invalid vol = %d return \n", __func__, vol);
-        return 0;
-    }
+	if (vol >= sizeof(avc_vol_tbl) / sizeof(avc_vol_tbl[0])) {
+		pr_err("%s() : Invalid vol = %d return \n", __func__, vol);
+		return 0;
+	}
 
-    g_avc_volume = vol;
+	g_avc_volume = vol;
 
-    pr_debug("%s(): AVC Volume= -%d db  state = %s\n", __func__, g_avc_volume , power_state[es9218_power_state]);
+	pr_debug("%s(): AVC Volume= -%d db  state = %s\n", __func__,
+		 g_avc_volume, power_state[es9218_power_state]);
 
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_debug("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_debug("%s() : invalid state = %s\n", __func__,
+			 power_state[es9218_power_state]);
 
-#ifdef ES9218P_SYSFS
-    if(forced_avc_volume != -1 && forced_avc_volume != g_avc_volume)
-        g_avc_volume = forced_avc_volume;
+		return 0;
+	}
+
+#if ES9218P_SYSFS == 1
+	if (forced_avc_volume != -1 && forced_avc_volume != g_avc_volume)
+		g_avc_volume = forced_avc_volume;
 #endif
+	es9218_set_avc_volume(g_es9218_priv->i2c_client, g_avc_volume);
 
-    es9218_set_avc_volume(g_es9218_priv->i2c_client, g_avc_volume);
-    return ret;
+	return ret;
 }
 
 static int es9218_master_volume_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				    struct snd_ctl_elem_value *ucontrol)
 {
-    ucontrol->value.integer.value[0] = g_volume;
-    pr_debug("%s(): Master Volume= -%d db\n", __func__, g_volume/2);
+	ucontrol->value.integer.value[0] = g_volume;
+	pr_debug("%s(): Master Volume= -%d db\n", __func__, g_volume / 2);
 
-    return 0;
+	return 0;
 }
 
 static int es9218_master_volume_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				    struct snd_ctl_elem_value *ucontrol)
 {
-    int ret = 0;
+	int ret = 0;
 
-    g_volume = (int)ucontrol->value.integer.value[0];
-    pr_debug("%s(): Master Volume= -%d db\n", __func__, g_volume/2);
+	g_volume = (int)ucontrol->value.integer.value[0];
+	pr_debug("%s(): Master Volume= -%d db\n", __func__, g_volume / 2);
 
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
 
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
+		return ret;
+	}
 
-    es9218_master_trim(g_es9218_priv->i2c_client, g_volume);
-    return ret;
+	es9218_master_trim(g_es9218_priv->i2c_client, g_volume);
+
+	return ret;
 }
 
 static int es9218_left_volume_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				  struct snd_ctl_elem_value *ucontrol)
 {
-    ucontrol->value.integer.value[0] = g_left_volume;
-    pr_debug("%s(): Left Volume= -%d db\n", __func__, g_left_volume/2);
+	ucontrol->value.integer.value[0] = g_left_volume;
+	pr_debug("%s(): Left Volume= -%d db\n", __func__, g_left_volume / 2);
 
-    return 0;
+	return 0;
 }
 
 static int es9218_left_volume_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				  struct snd_ctl_elem_value *ucontrol)
 {
-    int ret = 0;
+	int ret = 0;
 
-    g_left_volume = (int)ucontrol->value.integer.value[0];
-    pr_debug("%s(): Left Volume= -%d db\n", __func__, g_left_volume/2);
+	g_left_volume = (int)ucontrol->value.integer.value[0];
+	pr_debug("%s(): Left Volume= -%d db\n", __func__, g_left_volume / 2);
 
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
 
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_15, g_left_volume);
-    return ret;
+		return ret;
+	}
+
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_VOL1_CTRL,
+			 g_left_volume);
+
+	return ret;
 }
 
 static int es9218_right_volume_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				   struct snd_ctl_elem_value *ucontrol)
 {
-    ucontrol->value.integer.value[0] = g_right_volume;
-    pr_debug("%s(): Right Volume= -%d db\n", __func__, g_right_volume/2);
+	ucontrol->value.integer.value[0] = g_right_volume;
+	pr_debug("%s(): Right Volume= -%d db\n", __func__, g_right_volume / 2);
 
-    return 0;
+	return 0;
 }
 
 static int es9218_right_volume_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				   struct snd_ctl_elem_value *ucontrol)
 {
-    int ret = 0;
+	int ret = 0;
 
-    g_right_volume = (int)ucontrol->value.integer.value[0];
-    pr_debug("%s(): Right Volume= -%d db\n", __func__, g_right_volume/2);
+	g_right_volume = (int)ucontrol->value.integer.value[0];
+	pr_debug("%s(): Right Volume= -%d db\n", __func__, g_right_volume / 2);
 
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
 
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_16, g_right_volume);
-    return ret;
+		return ret;
+	}
+
+	es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_VOL2_CTRL,
+			 g_right_volume);
+
+	return ret;
 }
 
 static int es9218_filter_enum_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				  struct snd_ctl_elem_value *ucontrol)
 {
-    ucontrol->value.integer.value[0] = g_sabre_cf_num;
-    pr_debug("%s(): ucontrol = %d\n", __func__, g_sabre_cf_num);
-    return 0;
+	ucontrol->value.integer.value[0] = g_sabre_cf_num;
+	pr_debug("%s(): ucontrol = %d\n", __func__, g_sabre_cf_num);
+
+	return 0;
 }
 
 static int es9218_filter_enum_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				  struct snd_ctl_elem_value *ucontrol)
 {
-    int ret = 0;
-    u8 reg;
-
+	int ret = 0;
+	uint8_t reg;
 #ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
-    int new_filter = 0;
+	int new_filter = 0;
 
-    new_filter = (int)ucontrol->value.integer.value[0];
-    pr_info("%s(): g_sabre_cf_num %d, new filter num = %d \n", __func__, g_sabre_cf_num, new_filter);
+	new_filter = (int)ucontrol->value.integer.value[0];
+	pr_info("%s(): g_sabre_cf_num %d, new filter num = %d \n", __func__,
+		g_sabre_cf_num, new_filter);
 
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_info("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_info("%s() : invalid state = %s\n", __func__,
+			power_state[es9218_power_state]);
+
+		return ret;
+	}
+
 #endif
-    g_sabre_cf_num = (int)ucontrol->value.integer.value[0];
-    pr_debug("%s():filter num= %d\n", __func__, g_sabre_cf_num);
-    reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
-    reg = reg|0x01;
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, reg);
-    mdelay(2);
-    es9218_sabre_cfg_custom_filter(&es9218_sabre_custom_ft[g_sabre_cf_num]);
-    reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
-    reg &= ~0x01;
-    es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, reg);
-    mdelay(2);
-    return ret;
+	g_sabre_cf_num = (int)ucontrol->value.integer.value[0];
+	pr_debug("%s():filter num= %d\n", __func__, g_sabre_cf_num);
+	reg = es9218_read_reg(g_es9218_priv->i2c_client,
+			      ES9218P_FILTER_BAND_SYSTEM_MUTE);
+	reg |= 0x01;
+	es9218_write_reg(g_es9218_priv->i2c_client,
+			 ES9218P_FILTER_BAND_SYSTEM_MUTE, reg);
+	mdelay(2);
+	es9218_sabre_cfg_custom_filter(&sabre_custom_ft[g_sabre_cf_num]);
+	reg = es9218_read_reg(g_es9218_priv->i2c_client,
+			      ES9218P_FILTER_BAND_SYSTEM_MUTE);
+	reg &= ~0x01;
+	es9218_write_reg(g_es9218_priv->i2c_client,
+			 ES9218P_FILTER_BAND_SYSTEM_MUTE, reg);
+	mdelay(2);
+
+	return ret;
 }
 
 static int es9218_dop_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+			  struct snd_ctl_elem_value *ucontrol)
 {
-    ucontrol->value.integer.value[0] = g_dop_flag;
-    pr_debug("%s() %d\n", __func__, g_dop_flag);
-    return 0;
+	ucontrol->value.integer.value[0] = g_dop_flag;
+	pr_debug("%s() %d\n", __func__, g_dop_flag);
+
+	return 0;
 }
 
 static int mode_changed = 0;
 static int es9218_dop_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+			  struct snd_ctl_elem_value *ucontrol)
 {
-    /* g_dop_flag is for checking a format.
-      0   : PCM format
-      64  : DoP format(DSD64)
-      128 : DoP format(DSD128)
-    */
+	/* g_dop_flag checks the playback format as shown below:
+	 *
+	 * 0   -> PCM
+	 * 64  -> DoP64 (otherwise known as DSD64)
+	 * 128 -> DoP128 (otherwise known as DSD128)
+	*/
+	prev_dop_flag = g_dop_flag;
 
-    prev_dop_flag = g_dop_flag; // stored a prevoius format
+	g_dop_flag = (int)ucontrol->value.integer.value[0];
+	pr_debug("%s() dop_enable:%d, state:%d\n", __func__, g_dop_flag,
+		 es9218_power_state);
 
-    g_dop_flag = (int)ucontrol->value.integer.value[0];
-    pr_debug("%s() dop_enable:%d, state:%d\n", __func__, g_dop_flag, es9218_power_state);
-    if( !(g_dop_flag == 0 || g_dop_flag == 64 || g_dop_flag == 128 ) ) {
-        pr_err("%s() dop_enable error:%d. invalid arg.\n", __func__, g_dop_flag);
-    }
+	if (!(g_dop_flag == 0 || g_dop_flag == 64 || g_dop_flag == 128)) {
+		pr_err("%s() dop_enable error:%d. invalid arg.\n", __func__,
+		       g_dop_flag);
+	}
 
-    if( prev_dop_flag != g_dop_flag )
-        mode_changed = 1;
+	if (prev_dop_flag != g_dop_flag)
+		mode_changed = 1;
 
-    return 0;
+	return 0;
 }
-#ifdef ES9219C
-static int es9218_clk_source_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-    ucontrol->value.integer.value[0] = clk_source;
-    pr_info("%s() clk_source = %d ,,,, 0: X-tal( 45.1584MHz), 1: MCLK : 19.2MHz, 3: BCLK \n", __func__, clk_source);
-
-    return 0;
-}
-
-static int es9218_clk_source_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-    clk_source = (int)ucontrol->value.integer.value[0];
-    pr_info("%s() clk_source = %d ,,,, 0: X-tal( 45.1584MHz), 1: MCLK : 19.2MHz, 3: BCLK \n", __func__, clk_source);
-
-    return 0;
-}
-
-static void es9218_chip_revision_get(void)
-{
-    int ret ;
-    u8  readChipStatus;
-    unsigned char   chipId = 0x00;
-    int readCnt;
-
-    pr_debug("%s(): enter, es9218_power_state=%s.\n", __func__, power_state[es9218_power_state]);
-
-
-    if (g_es9218_priv->es9218_data->is_es9219c && clk_source == 1) {
-        pr_info("%s() hifi_ext_mclk enable\n", __func__);
-        ret = clk_prepare_enable(hifi_ext_mclk);
-        if (ret)
-            pr_err("%s() : ext clk enable failed\n", __func__);
-    }
-
-    mutex_lock(&g_es9218_priv->power_lock);
-    es9218_power_gpio_H();
-    mdelay(1);
-    es9218_reset_gpio_H();
-    mdelay(1);
-
-    if(!g_ess_rev_check) // ESS Revision check is one time during the booting.
-    {
-        for (readCnt = 0; readCnt < 3; readCnt++) {
-            readChipStatus = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_CHIPSTATUS);
-            chipId = readChipStatus & 0xFC;
-
-            pr_err("%s: chipId:0x%x readCnt : %d \n", __func__, chipId , readCnt);
-
-            if (chipId == 0xd0){
-                pr_err("%s: ESS revsion = ESS_9218p\n", __func__);
-                g_ess_rev_check = true;
-                break;
-            }
-            else if (chipId == 0x8c){
-                pr_err("%s: ESS revsion = ESS_9219\n", __func__);
-                g_ess_rev_check = true;
-                break;
-            }
-            else if (chipId == 0xe0){
-                pr_err("%s: ESS revsion = ESS_9228\n", __func__);
-                g_ess_rev_check = true;
-                break;
-            }
-        }
-    }
-
-    if(es9218_power_state < ESS_PS_HIFI){
-        es9218_reset_gpio_L();
-
-        if (g_es9218_priv->es9218_data->is_es9219c && clk_source == 1) {
-            pr_info("%s() hifi_ext_mclk disable\n", __func__);
-            clk_disable_unprepare(hifi_ext_mclk);
-
-            if (chipId == 0xd0){ // es9218p for HW revision 1.0
-                g_es9218_priv->es9218_data->is_es9219c = false;
-            }
-        }
-
-        // power off when ess chis becomes shutdown
-        if( g_es9218_priv->es9218_data->always_power_on == false ) {
-            if( es9218_power_state == ESS_PS_BYPASS ) {
-                pr_info("%s(): headphones is already inserted from booting up. call es9218p_standby2lpb() to re-enter to lpb. \n", __func__);
-                es9218p_standby2lpb();
-                //////////////////////////////////////////////////////////////////////////////////////
-                // Sabre is now powered on in Low Power Bypass mode[ResetB Low and GPIO2(switch) High]
-                //////////////////////////////////////////////////////////////////////////////////////
-                pr_info("%s(): re-enter to lpb by calling es9218p_standby2lpb(). \n", __func__);
-            } else {
-                es9218_power_gpio_L();
-            }
-        }
-    }
-
-    mutex_unlock(&g_es9218_priv->power_lock);
-
-    pr_debug("%s(): leave, es9218_power_state=%s.\n", __func__, power_state[es9218_power_state]);
-
-}
-#endif
 
 static int es9218_chip_state_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				 struct snd_ctl_elem_value *ucontrol)
 {
-    int ret ;
-    u8  readChipStatus;
-    unsigned char   chipId = 0x00;
-    int readCnt;
+	int ret;
+	uint8_t readChipStatus;
+	unsigned char chipId = 0x00;
+	int readCnt;
 
-    pr_debug("%s(): enter, es9218_power_state=%s.\n", __func__, power_state[es9218_power_state]);
+	pr_debug("%s(): enter, es9218_power_state=%s.\n", __func__,
+		 power_state[es9218_power_state]);
 
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c && clk_source == 1) {
-        pr_info("%s() hifi_ext_mclk enable\n", __func__);
-        ret = clk_prepare_enable(hifi_ext_mclk);
-        if (ret)
-            pr_err("%s() : ext clk enable failed\n", __func__);
-    }
-#endif
-    mutex_lock(&g_es9218_priv->power_lock);
-    es9218_power_gpio_H();
-    mdelay(1);
-#ifdef WORKAROUND_FOR_CORNER_SAMPLES
-    es9218_reset_gpio_H();
-    mdelay(1);
+	mutex_lock(&g_es9218_priv->power_lock);
 
-    /*
-     * workaround 1 : set RESETB high twice
-     * improvement for auto power on sequence inside ES921P chip
-     * it's expected to prevent i2c failure
-     */
-    es9218_reset_gpio_L();
-    mdelay(1);
-    es9218_reset_gpio_H();
-    mdelay(2);
+	es9218_power_gpio_H();
+	mdelay(1);
+	es9218_reset_gpio_H();
+	mdelay(1);
 
-    /*
-     * workaround 2 : send a I2C cmd of soft_reset
-     * improvement for auto power on sequence inside ES921P chip
-     * it's expected to read default values of registers WELL
-     */
-    i2c_smbus_write_byte_data(g_es9218_priv->i2c_client, ES9218P_REG_00, 0x01);
-    mdelay(1);
-#else /* Original code. Finally, we MUST use code below if ESS confirms that chips have no problems */
-    es9218_reset_gpio_H();
-    mdelay(1);
-#endif
+	/* The ESS revision check is done once during boot. */
+	if (!g_ess_rev_check) {
+		for (readCnt = 0; readCnt < 3; readCnt++) {
+			readChipStatus = es9218_read_reg(
+				g_es9218_priv->i2c_client, ES9218P_CHIPSTATUS);
+			chipId = readChipStatus & 0xF0;
 
-    if(!g_ess_rev_check) // ESS Revision check is one time during the booting.
-    {
-        for (readCnt = 0; readCnt < 3; readCnt++) {
-            readChipStatus = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_CHIPSTATUS);
-            chipId = readChipStatus & 0xFC;
+			pr_err("%s: chipId:0x%x readCnt : %d \n", __func__,
+			       chipId, readCnt);
 
-            pr_err("%s: chipId:0x%x readCnt : %d \n", __func__, chipId , readCnt);
+			if (chipId == 0xd0) {
+				pr_err("%s: ESS revsion = ESS_9218p\n",
+				       __func__);
+				g_ess_rev_check = true;
+				break;
+			} else if (chipId == 0xe0) {
+				pr_err("%s: ESS revsion = ESS_9228\n",
+				       __func__);
+				g_ess_rev_check = true;
+				break;
+			}
+		}
+	}
 
-            if (chipId == 0xd0){
-                pr_err("%s: ESS revsion = ESS_9218p\n", __func__);
-                g_ess_rev_check = true;
-                break;
-            }
-            else if (chipId == 0x8c){
-                pr_err("%s: ESS revsion = ESS_9219\n", __func__);
-                g_ess_rev_check = true;
-                break;
-            }
-            else if (chipId == 0xe0){
-                pr_err("%s: ESS revsion = ESS_9228\n", __func__);
-                g_ess_rev_check = true;
-                break;
-            }
-        }
-    }
+	ret = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_SYSTEM_REG);
+	if (ret < 0) {
+		pr_err("%s : i2_read fail : %d\n", __func__, ret);
+		ucontrol->value.enumerated.item[0] = 0;
+	} else {
+		pr_notice("%s : i2_read success : %d\n", __func__, ret);
+		ucontrol->value.enumerated.item[0] = 1;
+	}
 
-    ret = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_00);
-    if(ret<0){
-        pr_err("%s : i2_read fail : %d\n",__func__ ,ret);
-        ucontrol->value.enumerated.item[0] = 0; // fail
-    } else {
-        pr_notice("%s : i2_read success : %d\n",__func__ ,ret);
-        ucontrol->value.enumerated.item[0] = 1; // true
-    }
+	if (es9218_power_state < ESS_PS_HIFI) {
+		es9218_reset_gpio_L();
 
-    if(es9218_power_state < ESS_PS_HIFI){
-        es9218_reset_gpio_L();
-#ifdef ES9219C
-        if (g_es9218_priv->es9218_data->is_es9219c && clk_source == 1) {
-            pr_info("%s() hifi_ext_mclk disable\n", __func__);
-            clk_disable_unprepare(hifi_ext_mclk);
-        }
-#endif
-        // power off when ess chis becomes shutdown
-        if( g_es9218_priv->es9218_data->always_power_on == false ) {
-            if( es9218_power_state == ESS_PS_BYPASS ) {
-                pr_info("%s(): headphones is already inserted from booting up. call es9218p_standby2lpb() to re-enter to lpb. \n", __func__);
-                es9218p_standby2lpb();
-                //////////////////////////////////////////////////////////////////////////////////////
-                // Sabre is now powered on in Low Power Bypass mode[ResetB Low and GPIO2(switch) High]
-                //////////////////////////////////////////////////////////////////////////////////////
-                pr_info("%s(): re-enter to lpb by calling es9218p_standby2lpb(). \n", __func__);
-            } else {
-                es9218_power_gpio_L();
-            }
-        }
-    }
+		/* Power off when the ESS chip shuts down. */
+		if (g_es9218_priv->es9218_data->always_power_on == false) {
+			if (es9218_power_state == ESS_PS_BYPASS) {
+				pr_info("%s(): headphones is already inserted from booting up. call es9218p_sabre_standby2lpb() to re-enter to lpb. \n",
+					__func__);
+				es9218p_sabre_standby2lpb();
 
-    mutex_unlock(&g_es9218_priv->power_lock);
+				/* SABRE is now in LPB Mode. */
 
-    pr_debug("%s(): leave, es9218_power_state=%s.\n", __func__, power_state[es9218_power_state]);
-    return 0;
+				pr_info("%s(): re-enter to lpb by calling es9218p_sabre_standby2lpb(). \n",
+					__func__);
+			} else {
+				es9218_power_gpio_L();
+			}
+		}
+	}
+
+	mutex_unlock(&g_es9218_priv->power_lock);
+
+	pr_debug("%s(): leave, es9218_power_state=%s.\n", __func__,
+		 power_state[es9218_power_state]);
+	return 0;
 }
 
 static int es9218_chip_state_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				 struct snd_ctl_elem_value *ucontrol)
 {
-    int ret = 0;
+	int ret = 0;
 
-    //ret= ucontrol->value.enumerated.item[0];
-    pr_debug("%s():ret = %d\n", __func__ ,ret );
-    return 0;
+#if 0
+	ret = ucontrol->value.enumerated.item[0];
+#endif
+	pr_debug("%s():ret = %d\n", __func__, ret);
+
+	return ret;
 }
 
 static int chargerlogo_chipstate_get(void)
 {
-    int ret ;
-    u8  readChipStatus;
-    unsigned char   chipId = 0x00;
-    int readCnt;
+	int ret;
+	uint8_t readChipStatus;
+	unsigned char chipId = 0x00;
+	int readCnt;
 
-    pr_debug("%s(): enter, es9218_power_state=%s.\n", __func__, power_state[es9218_power_state]);
+	pr_debug("%s(): enter, es9218_power_state=%s.\n", __func__,
+		 power_state[es9218_power_state]);
 
-    mutex_lock(&g_es9218_priv->power_lock);
-    es9218_power_gpio_H();
-    mdelay(1);
-    es9218_reset_gpio_H();
-    mdelay(1);
+	mutex_lock(&g_es9218_priv->power_lock);
 
-    if(!g_ess_rev_check) // ESS Revision check is one time during the booting.
-    {
-        for (readCnt = 0; readCnt < 3; readCnt++) {
-            readChipStatus = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_CHIPSTATUS);
-            chipId = readChipStatus & 0xF0;
+	es9218_power_gpio_H();
+	mdelay(1);
+	es9218_reset_gpio_H();
+	mdelay(1);
 
-            pr_info("%s: chipId:0x%x readCnt : %d \n", __func__, chipId , readCnt);
+	/* The ESS revision check is done once during boot. */
+	if (!g_ess_rev_check) {
+		for (readCnt = 0; readCnt < 3; readCnt++) {
+			readChipStatus = es9218_read_reg(
+				g_es9218_priv->i2c_client, ES9218P_CHIPSTATUS);
+			chipId = readChipStatus & 0xF0;
 
-            if (chipId == 0xd0){
-                pr_info("%s: ESS revsion = ESS_9218p\n", __func__);
-                g_ess_rev_check = true;
-                break;
-            }
-            else if (chipId == 0xe0){
-                pr_info("%s: ESS revsion = ESS_9228\n", __func__);
-                g_ess_rev_check = true;
-                break;
-            }
-        }
-    }
+			pr_info("%s: chipId:0x%x readCnt : %d \n", __func__,
+				chipId, readCnt);
 
-    ret = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_00);
-    if(ret<0){
-        pr_err("%s : i2_read fail : %d\n",__func__ ,ret);
-    } else {
-        pr_notice("%s : i2_read success : %d\n",__func__ ,ret);
-    }
+			if (chipId == 0xd0) {
+				pr_info("%s: ESS revsion = ESS_9218p\n",
+					__func__);
+				g_ess_rev_check = true;
+				break;
+			} else if (chipId == 0xe0) {
+				pr_info("%s: ESS revsion = ESS_9228\n",
+					__func__);
+				g_ess_rev_check = true;
+				break;
+			}
+		}
+	}
 
-    if(es9218_power_state < ESS_PS_HIFI){
-        es9218_reset_gpio_L();
+	ret = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_SYSTEM_REG);
+	if (ret < 0) {
+		pr_err("%s : i2_read fail : %d\n", __func__, ret);
+	} else {
+		pr_notice("%s : i2_read success : %d\n", __func__, ret);
+	}
 
-        // power off when ess chis becomes shutdown
-        if( g_es9218_priv->es9218_data->always_power_on == false ) {
-            if( es9218_power_state == ESS_PS_BYPASS ) {
-                pr_info("%s(): headphones is already inserted from booting up. call es9218p_standby2lpb() to re-enter to lpb. \n", __func__);
-                es9218p_standby2lpb();
-                //////////////////////////////////////////////////////////////////////////////////////
-                // Sabre is now powered on in Low Power Bypass mode[ResetB Low and GPIO2(switch) High]
-                //////////////////////////////////////////////////////////////////////////////////////
-                pr_info("%s(): re-enter to lpb by calling es9218p_standby2lpb(). \n", __func__);
-            } else {
-                es9218_power_gpio_L();
-            }
-        }
-    }
+	if (es9218_power_state < ESS_PS_HIFI) {
+		es9218_reset_gpio_L();
 
-    mutex_unlock(&g_es9218_priv->power_lock);
+		/* Power off when the ESS chip shuts down. */
+		if (g_es9218_priv->es9218_data->always_power_on == false) {
+			if (es9218_power_state == ESS_PS_BYPASS) {
+				pr_info("%s(): headphones is already inserted from booting up. call es9218p_sabre_standby2lpb() to re-enter to lpb. \n",
+					__func__);
+				es9218p_sabre_standby2lpb();
 
-    pr_debug("%s(): leave, es9218_power_state=%s.\n", __func__, power_state[es9218_power_state]);
-    return 0;
+				/* SABRE is now in LPB Mode. */
+
+				pr_info("%s(): re-enter to lpb by calling es9218p_sabre_standby2lpb(). \n",
+					__func__);
+			} else {
+				es9218_power_gpio_L();
+			}
+		}
+	}
+
+	mutex_unlock(&g_es9218_priv->power_lock);
+
+	pr_debug("%s(): leave, es9218_power_state=%s.\n", __func__,
+		 power_state[es9218_power_state]);
+
+	return 0;
 }
 
 static int es9218_sabre_wcdon2bypass_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+					 struct snd_ctl_elem_value *ucontrol)
 {
-    pr_err("%s(): power state = %d\n", __func__, es9218_power_state);
+	pr_err("%s(): power state = %d\n", __func__, es9218_power_state);
 
-    ucontrol->value.enumerated.item[0] = es9218_power_state;
-    pr_err("%s(): ucontrol = %d\n", __func__, ucontrol->value.enumerated.item[0]);
+	ucontrol->value.enumerated.item[0] = es9218_power_state;
+	pr_err("%s(): ucontrol = %d\n", __func__,
+	       ucontrol->value.enumerated.item[0]);
 
-    return 0;
+	return 0;
 }
 
 static int es9218_sabre_wcdon2bypass_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+					 struct snd_ctl_elem_value *ucontrol)
 {
-    int ret = 0 ;
+	int ret = 0;
 
-    mutex_lock(&g_es9218_priv->power_lock);
+	mutex_lock(&g_es9218_priv->power_lock);
 
+	ret = (int)ucontrol->value.integer.value[0];
 
-    ret = (int)ucontrol->value.integer.value[0];
+	pr_err("%s(): entry wcd on : %d \n ", __func__, ret);
 
-    pr_err("%s(): entry wcd on : %d \n ", __func__ , ret);
-
-    if(ret == 0) {
-#ifdef CONFIG_SND_SOC_HSDET_L_SWITCH
-        if(es9218_start && !g_es9218_priv->es9218_data->ess_hifi_exception) {
+	if (ret == 0) {
+		if (es9218_start) {
+			if (__es9218_sabre_headphone_on() == 0)
+				es9218p_sabre_bypass2hifi();
+			es9218_is_amp_on = 1;
+			pr_info("%s() : state = %s : WCD On State ByPass -> HiFi !!\n",
+				__func__, power_state[es9218_power_state]);
+		} else {
+			pr_info("%s() : state = %s : don't change\n", __func__,
+				power_state[es9218_power_state]);
+		}
+	} else {
+#if 0
+		if (es9218_power_state > ESS_PS_BYPASS &&
+			es9218_power_state == ESS_PS_IDLE) {
 #else
-        if(es9218_start) {
+		if (es9218_power_state > ESS_PS_BYPASS) {
 #endif
-            if( __es9218_sabre_headphone_on() == 0 )
-                es9218p_sabre_bypass2hifi();
-            es9218_is_amp_on = 1;
-            pr_info("%s() : state = %s : WCD On State ByPass -> HiFi !!\n", __func__, power_state[es9218_power_state]);
-        } else {
-            pr_info("%s() : state = %s : don't change\n", __func__, power_state[es9218_power_state]);
-        }
-    } else {
-        if ( es9218_power_state > ESS_PS_BYPASS ) {
-    //  if ( es9218_power_state == ESS_PS_IDLE ) {
-            pr_info("%s() : state = %s : WCD On State HiFi -> ByPass !!\n", __func__, power_state[es9218_power_state]);
-            cancel_delayed_work_sync(&g_es9218_priv->sleep_work);
-#if defined(CONFIG_ARCH_SM8150)
-            if(pm_qos_request_active(&req)) {
-                pr_info("%s(): pm qos active state. so, remove pm qos request", __func__);
-                pm_qos_remove_request(&req);
-            }
-#endif
-            es9218p_sabre_hifi2lpb();
-        }  else {
-            pr_info("%s() : Invalid state = %s !!\n", __func__, power_state[es9218_power_state]);
-        }
-        es9218_is_amp_on = 0;
-    }
-    pr_debug("%s(): exit\n", __func__);
+		pr_info("%s() : state = %s : WCD On State HiFi -> ByPass !!\n",
+			__func__, power_state[es9218_power_state]);
+		cancel_delayed_work_sync(&g_es9218_priv->sleep_work);
+		if (pm_qos_request_active(&req)) {
+			pr_info("%s(): pm qos active state. so, remove pm qos request",
+				__func__);
+			pm_qos_remove_request(&req);
+		}
+		es9218p_sabre_hifi2lpb();
+	}
+	else
+	{
+		pr_info("%s() : Invalid state = %s !!\n", __func__,
+			power_state[es9218_power_state]);
+	}
 
-    mutex_unlock(&g_es9218_priv->power_lock);
+	es9218_is_amp_on = 0;
+}
+pr_debug("%s(): exit\n", __func__);
 
-    return 0;
+mutex_unlock(&g_es9218_priv->power_lock);
+
+return 0;
 }
 
 static int es9218_clk_divider_get(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				  struct snd_ctl_elem_value *ucontrol)
 {
-    int err_check = -1;
-    u8 reg_val;
+	int err_check = -1;
+	uint8_t reg_val;
 
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
 
-    err_check = es9218_read_reg(g_es9218_priv->i2c_client,
-                MASTER_MODE_CONTROL);
-    if (err_check >= 0) {
-        reg_val = err_check;
-    } else {
-        return -1;
-    }
+		return 0;
+	}
 
-    reg_val = reg_val >> 5;
-    ucontrol->value.integer.value[0] = reg_val;
+	err_check = es9218_read_reg(g_es9218_priv->i2c_client,
+				    ES9218P_MASTERMODE_SYNC_CONFIG);
+	if (err_check >= 0) {
+		reg_val = err_check;
+	} else {
+		return -1;
+	}
 
-    pr_debug("%s: i2s_length = 0x%x\n", __func__, reg_val);
+	reg_val = reg_val >> 5;
+	ucontrol->value.integer.value[0] = reg_val;
 
-    return 0;
+	pr_debug("%s: i2s_length = 0x%x\n", __func__, reg_val);
+
+	return 0;
 }
 
 static int es9218_clk_divider_put(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
+				  struct snd_ctl_elem_value *ucontrol)
 {
-    int err_check = -1;
-    u8 reg_val;
+	int err_check = -1;
+	uint8_t reg_val;
 
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_err("%s() : invalid state = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_err("%s() : invalid state = %s\n", __func__,
+		       power_state[es9218_power_state]);
 
-    pr_debug("%s: ucontrol->value.integer.value[0]  = %ld\n", __func__, ucontrol->value.integer.value[0]);
+		return 0;
+	}
 
-    err_check = es9218_read_reg(g_es9218_priv->i2c_client,
-                MASTER_MODE_CONTROL);
-    if (err_check >= 0) {
-        reg_val = err_check;
-    } else {
-        return -1;
-    }
+	pr_debug("%s: ucontrol->value.integer.value[0]  = %ld\n", __func__,
+		 ucontrol->value.integer.value[0]);
 
-    reg_val &= ~(I2S_CLK_DIVID_MASK);
-    reg_val |=  ucontrol->value.integer.value[0] << 5;
+	err_check = es9218_read_reg(g_es9218_priv->i2c_client,
+				    ES9218P_MASTERMODE_SYNC_CONFIG);
+	if (err_check >= 0) {
+		reg_val = err_check;
+	} else {
+		return -1;
+	}
 
-    es9218_write_reg(g_es9218_priv->i2c_client,
-                MASTER_MODE_CONTROL, reg_val);
-    return 0;
+	reg_val &= ~(I2S_CLK_DIVID_MASK);
+	reg_val |= ucontrol->value.integer.value[0] << 5;
+
+	es9218_write_reg(g_es9218_priv->i2c_client,
+			 ES9218P_MASTERMODE_SYNC_CONFIG, reg_val);
+	return 0;
 }
 
-
-static const char * const es9218_power_state_texts[] = {
-    "Close",
-    "Open",
-    "Bypass",
-    "Hifi",
-    "Idle",
-    "Active",
-    "ResetHigh",
-    "ResetLow",
-    "HphHigh",
-    "HphLow"
+static const char *const es9218_power_state_texts[] = {
+	"Close",  "Open",      "Bypass",   "Hifi",    "Idle",
+	"Active", "ResetHigh", "ResetLow", "HphHigh", "HphLow"
 };
 
-static const char * const es9218_clk_divider_texts[] = {
-    "DIV4",
-    "DIV8",
-    "DIV16",
-    "DIV16"
-};
+static const char *const es9218_clk_divider_texts[] = { "DIV4", "DIV8", "DIV16",
+							"DIV16" };
 
 static const struct soc_enum es9218_power_state_enum =
-SOC_ENUM_SINGLE(SND_SOC_NOPM, 0,
-        ARRAY_SIZE(es9218_power_state_texts),
-        es9218_power_state_texts);
+	SOC_ENUM_SINGLE(SND_SOC_NOPM, 0, ARRAY_SIZE(es9218_power_state_texts),
+			es9218_power_state_texts);
 
-static const struct soc_enum es9218_clk_divider_enum =
-SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(es9218_clk_divider_texts),
-        es9218_clk_divider_texts);
+static const struct soc_enum es9218_clk_divider_enum = SOC_ENUM_SINGLE_EXT(
+	ARRAY_SIZE(es9218_clk_divider_texts), es9218_clk_divider_texts);
 
 static struct snd_kcontrol_new es9218_digital_ext_snd_controls[] = {
-    SOC_SINGLE_EXT("Es9018 Left Volume", SND_SOC_NOPM, 0, 256, 0,
-                    es9218_left_volume_get,
-                    es9218_left_volume_put),
-    SOC_SINGLE_EXT("Es9018 Right Volume", SND_SOC_NOPM, 0, 256, 0,
-                    es9218_right_volume_get,
-                    es9218_right_volume_put),
-    SOC_SINGLE_EXT("Es9018 Master Volume", SND_SOC_NOPM, 0, 100, 0,
-                    es9218_master_volume_get,
-                    es9218_master_volume_put),
-    SOC_SINGLE_EXT("HIFI Custom Filter", SND_SOC_NOPM, 0, 12, 0, //current 0~3 custom filter num 4~11 built-in filter
-                    es9218_filter_enum_get,
-                    es9218_filter_enum_put),
-    //SOC_SINGLE_EXT("HIFI THD Value", SND_SOC_NOPM, 0, 0xFFFFFF, 0, //current 0~3 filter num
-    //                es9018_set_filter_enum,
-    //                es9218_filter_enum_put),
+	SOC_SINGLE_EXT("Es9018 Left Volume", SND_SOC_NOPM, 0, 256, 0,
+		       es9218_left_volume_get, es9218_left_volume_put),
+	SOC_SINGLE_EXT("Es9018 Right Volume", SND_SOC_NOPM, 0, 256, 0,
+		       es9218_right_volume_get, es9218_right_volume_put),
+	SOC_SINGLE_EXT("Es9018 Master Volume", SND_SOC_NOPM, 0, 100, 0,
+		       es9218_master_volume_get, es9218_master_volume_put),
+	SOC_SINGLE_EXT(
+		"HIFI Custom Filter", SND_SOC_NOPM, 0, 12,
+		0, /* 0-3 are custom filters while 4-11 are built-in filters. */
+		es9218_filter_enum_get, es9218_filter_enum_put),
+#if 0
+	SOC_SINGLE_EXT("HIFI THD Value", SND_SOC_NOPM, 0, 0xFFFFFF, 0,
+				es9018_set_filter_enum,
+				es9218_filter_enum_put),
+#endif
 #ifdef CONFIG_SND_SOC_LGE_ESS_DIGITAL_FILTER
-    SOC_SINGLE_EXT("LGE ESS FADE INOUT", SND_SOC_NOPM, 0, 12, 0,
-                    lge_ess_fade_inout_get,
-                    lge_ess_fade_inout_put),
-    SOC_SINGLE_EXT("LGE ESS DIGITAL FILTER SETTING", SND_SOC_NOPM, 0, 12, 0,
-                    lge_ess_digital_filter_setting_get,
-                    lge_ess_digital_filter_setting_put),
+	SOC_SINGLE_EXT("LGE ESS FADE INOUT", SND_SOC_NOPM, 0, 12, 0,
+		       lge_ess_fade_inout_get, lge_ess_fade_inout_put),
+	SOC_SINGLE_EXT("LGE ESS DIGITAL FILTER SETTING", SND_SOC_NOPM, 0, 12, 0,
+		       lge_ess_digital_filter_setting_get,
+		       lge_ess_digital_filter_setting_put),
 #endif
-    SOC_ENUM_EXT("Es9018 State", es9218_power_state_enum,
-                    es9218_power_state_get,
-                    es9218_power_state_put),
-    SOC_ENUM_EXT("Es9018 CLK Divider", es9218_clk_divider_enum,
-                    es9218_clk_divider_get,
-                    es9218_clk_divider_put),
-    SOC_SINGLE_EXT("Es9018 Chip State", SND_SOC_NOPM, 0, 1, 0,
-                    es9218_chip_state_get,
-                    es9218_chip_state_put),
-    SOC_SINGLE_EXT("Es9018 AVC Volume", SND_SOC_NOPM, 0, 25, 0,
-                    es9218_avc_volume_get,
-                    es9218_avc_volume_put),
-    SOC_SINGLE_EXT("Es9018 HEADSET TYPE", SND_SOC_NOPM, 0, 4, 0,
-                    es9218_headset_type_get,
-                    es9218_headset_type_put),
-    SOC_SINGLE_EXT("Es9018 Dop", SND_SOC_NOPM, 0, 128, 0,
-                    es9218_dop_get,
-                    es9218_dop_put),
-    SOC_SINGLE_EXT("Es9218 AUTO_MUTE", SND_SOC_NOPM, 0, 1, 0,
-                    es9218_auto_mute_get,
-                    es9218_auto_mute_put),
-    SOC_SINGLE_EXT("Es9218 Bypass", SND_SOC_NOPM, 0, 1, 0,
-                    es9218_sabre_wcdon2bypass_get,
-                    es9218_sabre_wcdon2bypass_put),
-#ifdef ES9219C
-    SOC_SINGLE_EXT("Es9219 CLK_SOURCE", SND_SOC_NOPM, 0, 1, 0,
-                    es9218_clk_source_get,
-                    es9218_clk_source_put),
-#endif
-    SOC_SINGLE_MULTI_EXT("Es9218 NORMAL_HARMONIC LEFT", SND_SOC_NOPM, 0, 256,
-                    0, 4, NULL, es9218_normal_harmonic_comp_put_left),
-    SOC_SINGLE_MULTI_EXT("Es9218 ADVANCE_HARMONIC LEFT", SND_SOC_NOPM, 0, 256,
-                    0, 4, NULL, es9218_advance_harmonic_comp_put_left),
-    SOC_SINGLE_MULTI_EXT("ES9218 AUX_HARMONIC LEFT", SND_SOC_NOPM, 0, 256,
-                    0, 4, NULL, es9218_aux_harmonic_comp_put_left),
-    SOC_SINGLE_MULTI_EXT("Es9218 NORMAL_HARMONIC RIGHT", SND_SOC_NOPM, 0, 256,
-                    0, 4, NULL, es9218_normal_harmonic_comp_put_right),
-    SOC_SINGLE_MULTI_EXT("Es9218 ADVANCE_HARMONIC RIGHT", SND_SOC_NOPM, 0, 256,
-                    0, 4, NULL, es9218_advance_harmonic_comp_put_right),
-    SOC_SINGLE_MULTI_EXT("Es9218 AUX_HARMONIC RIGHT", SND_SOC_NOPM, 0, 256,
-                    0, 4, NULL, es9218_aux_harmonic_comp_put_right),
+	SOC_ENUM_EXT("Es9018 State", es9218_power_state_enum,
+		     es9218_power_state_get, es9218_power_state_put),
+	SOC_ENUM_EXT("Es9018 CLK Divider", es9218_clk_divider_enum,
+		     es9218_clk_divider_get, es9218_clk_divider_put),
+	SOC_SINGLE_EXT("Es9018 Chip State", SND_SOC_NOPM, 0, 1, 0,
+		       es9218_chip_state_get, es9218_chip_state_put),
+	SOC_SINGLE_EXT("Es9018 AVC Volume", SND_SOC_NOPM, 0, 25, 0,
+		       es9218_avc_volume_get, es9218_avc_volume_put),
+	SOC_SINGLE_EXT("Es9018 HEADSET TYPE", SND_SOC_NOPM, 0, 4, 0,
+		       es9218_headset_type_get, es9218_headset_type_put),
+	SOC_SINGLE_EXT("Es9018 Dop", SND_SOC_NOPM, 0, 128, 0, es9218_dop_get,
+		       es9218_dop_put),
+	SOC_SINGLE_EXT("Es9218 AUTO_MUTE", SND_SOC_NOPM, 0, 1, 0,
+		       es9218_auto_mute_get, es9218_auto_mute_put),
+	SOC_SINGLE_EXT("Es9218 Bypass", SND_SOC_NOPM, 0, 1, 0,
+		       es9218_sabre_wcdon2bypass_get,
+		       es9218_sabre_wcdon2bypass_put),
+	SOC_SINGLE_MULTI_EXT("Es9218 NORMAL_HARMONIC LEFT", SND_SOC_NOPM, 0,
+			     256, 0, 4, NULL,
+			     es9218_normal_harmonic_comp_put_left),
+	SOC_SINGLE_MULTI_EXT("Es9218 ADVANCE_HARMONIC LEFT", SND_SOC_NOPM, 0,
+			     256, 0, 4, NULL,
+			     es9218_advance_harmonic_comp_put_left),
+	SOC_SINGLE_MULTI_EXT("ES9218 AUX_HARMONIC LEFT", SND_SOC_NOPM, 0, 256,
+			     0, 4, NULL, es9218_aux_harmonic_comp_put_left),
+	SOC_SINGLE_MULTI_EXT("Es9218 NORMAL_HARMONIC RIGHT", SND_SOC_NOPM, 0,
+			     256, 0, 4, NULL,
+			     es9218_normal_harmonic_comp_put_right),
+	SOC_SINGLE_MULTI_EXT("Es9218 ADVANCE_HARMONIC RIGHT", SND_SOC_NOPM, 0,
+			     256, 0, 4, NULL,
+			     es9218_advance_harmonic_comp_put_right),
+	SOC_SINGLE_MULTI_EXT("Es9218 AUX_HARMONIC RIGHT", SND_SOC_NOPM, 0, 256,
+			     0, 4, NULL, es9218_aux_harmonic_comp_put_right),
 };
 
 static int es9218_read_reg(struct i2c_client *client, int reg)
 {
-    int ret;
+	int ret;
 
-    ret = i2c_smbus_read_byte_data(client, reg);
-    if (ret < 0) {
-        pr_err("%s: err %d , reg = %d \n", __func__, ret, reg);
-    }
+	ret = i2c_smbus_read_byte_data(client, reg);
+	if (ret < 0)
+		pr_err("%s: err %d\n", __func__, ret);
 
-    return ret;
+	return ret;
 }
 
-static int es9218_write_reg(struct i2c_client *client, int reg, u8 value)
+static int es9218_write_reg(struct i2c_client *client, int reg, uint8_t value)
 {
-    int ret, i;
-
-    // pr_notice("%s(): %03d=0x%x\n", __func__, reg, value);
-    for (i = 0; i < 3; i++) {
-        ret = i2c_smbus_write_byte_data(client, reg, value);
-        if (ret < 0) {
-            pr_err("%s: err %d,, reg = %d , and try again\n", __func__, ret , reg);
-            mdelay(50);
-        }
-        else {
-            break;
-        }
-    }
-
-    if (ret < 0) {
-        pr_err("%s: err %d\n", __func__, ret);
-    }
-
-    return ret;
-}
-static int es9218_populate_get_pdata(struct device *dev,
-        struct es9218_data *pdata)
-{
-#ifdef USE_CONTROL_EXTERNAL_LDO_FOR_DVDD
-    u32 vol_suply[2];
-    int ret;
-#endif
-
-    pdata->reset_gpio = of_get_named_gpio(dev->of_node,
-            "dac,reset-gpio", 0);
-
-    if (pdata->reset_gpio < 0) {
-        pr_err("Looking up %s property in node %s failed %d\n", "dac,reset-gpio", dev->of_node->full_name, pdata->reset_gpio);
-        goto err;
-    }
-
-    pr_info("%s: reset gpio %d", __func__, pdata->reset_gpio);
-
-#ifdef CONFIG_SND_SOC_HSDET_L_SWITCH
-    pdata->switch_gpio = of_get_named_gpio(dev->of_node,
-            "dac,switch-gpio", 0);
-
-    if (pdata->switch_gpio < 0) {
-        pr_err("Looking up %s property in node %s failed %d\n", "dac,switch-gpio", dev->of_node->full_name, pdata->switch_gpio);
-        //goto err;
-    }
-
-    pr_info("%s: switch gpio %d", __func__, pdata->switch_gpio);
-#endif
-
-    pdata->hph_switch = of_get_named_gpio(dev->of_node,
-            "dac,hph-sw", 0);
-    if (pdata->hph_switch < 0) {
-        pr_err("Looking up %s property in node %s failed %d\n", "dac,hph-sw", dev->of_node->full_name, pdata->hph_switch);
-        goto err;
-    }
-
-    pr_info("%s: hph switch %d", __func__, pdata->hph_switch);
-
-#ifdef DEDICATED_I2C
-    pdata->i2c_scl_gpio= of_get_named_gpio(dev->of_node,
-            "dac,i2c-scl-gpio", 0);
-    if (pdata->i2c_scl_gpio < 0) {
-        pr_err("Looking up %s property in node %s failed %d\n", "dac,i2c-scl-gpio", dev->of_node->full_name, pdata->i2c_scl_gpio);
-        goto err;
-    }
-    dev_dbg(dev, "%s: i2c_scl_gpio %d", __func__, pdata->i2c_scl_gpio);
-
-    pdata->i2c_sda_gpio= of_get_named_gpio(dev->of_node,
-            "dac,i2c-sda-gpio", 0);
-    if (pdata->i2c_sda_gpio < 0) {
-        pr_err("Looking up %s property in node %s failed %d\n", "dac,i2c-sda-gpio", dev->of_node->full_name, pdata->i2c_sda_gpio);
-        goto err;
-    }
-    pr_info("%s: i2c_sda_gpio %d", __func__, pdata->i2c_sda_gpio);
-#endif  //  End of  #ifdef  DEDICATED_I2C
-
-    pdata->power_gpio= of_get_named_gpio(dev->of_node,
-            "dac,power-gpio", 0);
-    if (pdata->power_gpio < 0) {
-        pr_err("Looking up %s property in node %s failed %d\n", "dac,power-gpio", dev->of_node->full_name, pdata->power_gpio);
-        goto err;
-    }
-
-    pr_info("%s: power gpio %d\n", __func__, pdata->power_gpio);
+	int ret, i;
 
 #if 0
-    pdata->ear_dbg = of_get_named_gpio(dev->of_node,
-            "dac,ear-dbg", 0);
-    if (pdata->ear_dbg < 0) {
-        pr_err("Looking up %s property in node %s failed %d\n", "dac,ear-dbg", dev->of_node->full_name, pdata->ear_dbg);
-        goto err;
-    }
-    pr_info("%s: ear_dbg gpio %d\n", __func__, pdata->ear_dbg);
+	pr_notice("%s(): %03d=0x%x\n", __func__, reg, value);
 #endif
 
-#ifdef USE_CONTROL_EXTERNAL_LDO_FOR_DVDD
-    pdata->vreg_dvdd = regulator_get(dev, "dac,dvdd");
-    if (IS_ERR(pdata->vreg_dvdd)) {
+	for (i = 0; i < 3; i++) {
+		ret = i2c_smbus_write_byte_data(client, reg, value);
+		if (ret < 0) {
+			pr_err("%s: err %d,and try again\n", __func__, ret);
+			mdelay(50);
+		} else {
+			break;
+		}
+	}
+
+	if (ret < 0)
+		pr_err("%s: err %d\n", __func__, ret);
+
+	return ret;
+}
+static int es9218_populate_get_pdata(struct device *dev,
+				     struct es9218_data *pdata)
+{
+#if USE_CONTROL_EXTERNAL_LDO_FOR_DVDD == 1
+	uint32_t vol_suply[2];
+	int ret;
+
+#endif
+	pdata->reset_gpio =
+		of_get_named_gpio(dev->of_node, "dac,reset-gpio", 0);
+
+	if (pdata->reset_gpio < 0) {
+		pr_err("Looking up %s property in node %s failed %d\n",
+		       "dac,reset-gpio", dev->of_node->full_name,
+		       pdata->reset_gpio);
+		goto err;
+	}
+
+	pr_info("%s: reset gpio %d", __func__, pdata->reset_gpio);
+
+	pdata->hph_switch = of_get_named_gpio(dev->of_node, "dac,hph-sw", 0);
+	if (pdata->hph_switch < 0) {
+		pr_err("Looking up %s property in node %s failed %d\n",
+		       "dac,hph-sw", dev->of_node->full_name,
+		       pdata->hph_switch);
+		goto err;
+	}
+
+	pr_info("%s: hph switch %d", __func__, pdata->hph_switch);
+
+#if DEDICATED_I2C == 1
+	pdata->i2c_scl_gpio =
+		of_get_named_gpio(dev->of_node, "dac,i2c-scl-gpio", 0);
+	if (pdata->i2c_scl_gpio < 0) {
+		pr_err("Looking up %s property in node %s failed %d\n",
+		       "dac,i2c-scl-gpio", dev->of_node->full_name,
+		       pdata->i2c_scl_gpio);
+		goto err;
+	}
+
+	dev_dbg(dev, "%s: i2c_scl_gpio %d", __func__, pdata->i2c_scl_gpio);
+
+	pdata->i2c_sda_gpio =
+		of_get_named_gpio(dev->of_node, "dac,i2c-sda-gpio", 0);
+	if (pdata->i2c_sda_gpio < 0) {
+		pr_err("Looking up %s property in node %s failed %d\n",
+		       "dac,i2c-sda-gpio", dev->of_node->full_name,
+		       pdata->i2c_sda_gpio);
+		goto err;
+	}
+	pr_info("%s: i2c_sda_gpio %d", __func__, pdata->i2c_sda_gpio);
+#endif
+
+	pdata->power_gpio =
+		of_get_named_gpio(dev->of_node, "dac,power-gpio", 0);
+	if (pdata->power_gpio < 0) {
+		pr_err("Looking up %s property in node %s failed %d\n",
+		       "dac,power-gpio", dev->of_node->full_name,
+		       pdata->power_gpio);
+		goto err;
+	}
+
+	pr_info("%s: power gpio %d\n", __func__, pdata->power_gpio);
+
+#if 0
+	pdata->ear_dbg = of_get_named_gpio(dev->of_node, "dac,ear-dbg", 0);
+	if (pdata->ear_dbg < 0) {
+		pr_err("Looking up %s property in node %s failed %d\n", "dac,ear-dbg",
+			dev->of_node->full_name, pdata->ear_dbg);
+		goto err;
+	}
+	pr_info("%s: ear_dbg gpio %d\n", __func__, pdata->ear_dbg);
+#endif
+
+#if USE_CONTROL_EXTERNAL_LDO_FOR_DVDD == 1
+	pdata->vreg_dvdd = regulator_get(dev, "dac,dvdd");
+	if (IS_ERR(pdata->vreg_dvdd)) {
 		/*
-		 * if analog voltage regulator, VA is not ready yet, return
-		 * -EPROBE_DEFER to kernel so that probe will be called at
-		 * later point of time.
+		 * If the analog voltage regulator (VA) is not ready yet, return
+		 * -EPROBE_DEFER to kernel so that probe will be called at a later
+		 * point in time.
 		 */
 		if (PTR_ERR(pdata->vreg_dvdd) == -EPROBE_DEFER) {
 			pr_err("In %s, vreg_dvdd probe defer\n", __func__);
 			devm_kfree(dev, pdata);
-            return PTR_ERR(pdata->vreg_dvdd);
+
+			return PTR_ERR(pdata->vreg_dvdd);
 		}
 	}
 
-    pr_info("%s: DVDD ldo GET\n", __func__);
+	pr_info("%s: DVDD ldo GET\n", __func__);
 
-    ret = of_property_read_u32_array(dev->of_node, "dac,va-supply-voltage", vol_suply, 2);
-    if (ret < 0) {
-        pr_err("%s Invalid property name\n",__func__);
-        regulator_put(pdata->vreg_dvdd);
-        devm_kfree(dev, pdata);
-        return -EINVAL;
-    } else {
-        pdata->low_vol_level = vol_suply[0];
-        pdata->high_vol_level = vol_suply[1];
-        pr_info("%s: MIN uV=%d, MAX uV=%d. \n",
-            __func__, pdata->low_vol_level, pdata->high_vol_level);
-    }
+	ret = of_property_read_uint32_t_array(
+		dev->of_node, "dac,va-supply-voltage", vol_suply, 2);
+	if (ret < 0) {
+		pr_err("%s Invalid property name\n", __func__);
+		regulator_put(pdata->vreg_dvdd);
+		devm_kfree(dev, pdata);
+		return -EINVAL;
+	} else {
+		pdata->low_vol_level = vol_suply[0];
+		pdata->high_vol_level = vol_suply[1];
+		pr_info("%s: MIN uV=%d, MAX uV=%d. \n", __func__,
+			pdata->low_vol_level, pdata->high_vol_level);
+	}
 #endif
 
-    /*
-     * pre-condition to use dynamic power on/off
-     * 1. Two LDOs are dedicated for each 1.8V, 3.3V(to handle LDOs on/off)
-     * 2. DVDD line is connected to GND(to avoid leakage current at sleep mode)
-    */
-    if( of_property_read_bool(dev->of_node, "dac,disable-always-power-on") ) {
-        pdata->always_power_on = false;
-    } else {
-        pdata->always_power_on = true;
-    }
+	/*
+	 * There are two conditions to use dynamic power management:
+	 *
+	 * 1) Two LDOs are dedicated for each 1.8V, 3.3V line (to handle LDOs
+	 *    on/off).
+	 * 2) The DVDD line must be connected to GND (to avoid current leakage
+	 *    during sleep).
+	 */
+	if (of_property_read_bool(dev->of_node,
+				  "dac,disable-always-power-on")) {
+		pdata->always_power_on = false;
+	} else {
+		pdata->always_power_on = true;
+	}
 
-    pr_info("%s: always-power-on is [%s]\n", __func__, pdata->always_power_on?"enabled":"disabled");
+	pr_info("%s: always-power-on is [%s]\n", __func__,
+		pdata->always_power_on ? "enabled" : "disabled");
 
-    /*
-     * if DVDD pin is connected to GND, the internal LDO must be used.
-     * if DVDD pin is connected to 1.2V, we have to choose internal/external LDO through a method below.
-     * At first, MUST measure current at active/sleep,
-     * and figure out which one is better
-     * with power conpsumtion(at active) including leakage current(at sleep).
-    */
-    if( of_property_read_bool(dev->of_node, "dac,use-internal-ldo") ) {
-        pdata->use_internal_ldo = true;
-    } else {
-        pdata->use_internal_ldo = false;
-    }
+	/*
+	 * If the DVDD pin is connected to GND, the internal LDO must be used.
+	 *
+	 * However, if DVDD pin is connected to the 1.2V line, we have to choose
+	 * between the internal and external LDO by measuring the current during
+	 * chip activity and sleep, then finding out which has better power
+	 * consumption (while looking out for current leakages during sleep).
+	 */
+	if (of_property_read_bool(dev->of_node, "dac,use-internal-ldo")) {
+		pdata->use_internal_ldo = true;
+	} else {
+		pdata->use_internal_ldo = false;
+	}
 
-    pr_info("%s: use-internal-ldo is [%s]\n", __func__, pdata->use_internal_ldo?"enabled":"disabled");
-#ifdef ES9219C
-    if( of_property_read_bool(dev->of_node, "dac,es9219") ) {
-        pdata->is_es9219c = true;
-    } else {
-        pdata->is_es9219c = false;
-    }
-    pr_info("%s: HIFI Dac is es9219 [%d]\n", __func__, pdata->is_es9219c);
+	pr_info("%s: use-internal-ldo is [%s]\n", __func__,
+		pdata->use_internal_ldo ? "enabled" : "disabled");
 
-    if (pdata->is_es9219c && clk_source == 1) {
-        hifi_ext_mclk = clk_get(dev, "hifi_mclk");
-        if (IS_ERR(hifi_ext_mclk)) {
-            pr_err("%s MCLK get failed\n", __func__);
-        }
-    }
-#endif
-    return 0;
+	return 0;
 
 err:
-    devm_kfree(dev, pdata);
-    return -1;
+	devm_kfree(dev, pdata);
+	return -1;
 }
 
 static unsigned int es9218_codec_read(struct snd_soc_codec *codec,
-        unsigned int reg)
+				      unsigned int reg)
 {
-    //struct es9218_priv *priv = codec->control_data;
+#if 0
+	struct es9218_priv *priv = codec->control_data;
+#endif
 
-    return 0;
+	return 0;
 }
 
 static int es9218_codec_write(struct snd_soc_codec *codec, unsigned int reg,
-        unsigned int value)
+			      unsigned int value)
 {
-    //struct es9218_priv *priv = codec->control_data;
+#if 0
+	struct es9218_priv *priv = codec->control_data;
+#endif
 
-    return 0;
+	return 0;
 }
 
 static int es9218_set_bias_level(struct snd_soc_codec *codec,
-        enum snd_soc_bias_level level)
+				 enum snd_soc_bias_level level)
 {
-    int ret = 0;
-
+	int ret = 0;
 	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(codec);
 
-    /* dev_dbg(codec->dev, "%s(codec, level = 0x%04x): entry\n", __func__, level); */
-
-    switch (level) {
-        case SND_SOC_BIAS_ON:
-            break;
-
-        case SND_SOC_BIAS_PREPARE:
-            break;
-
-        case SND_SOC_BIAS_STANDBY:
-            break;
-
-        case SND_SOC_BIAS_OFF:
-            break;
-    }
-#if 0 //LGE_AudioBSP, temp code for fix build error // org code
-        codec->dapm.bias_level = level;
-#else
-        dapm->bias_level = level;
+#if 0
+	dev_dbg(codec->dev, "%s(codec, level = 0x%04x): entry\n", __func__, level);
 #endif
 
-    /* dev_dbg(codec->dev, "%s(): exit\n", __func__); */
-    return ret;
+	switch (level) {
+	case SND_SOC_BIAS_ON:
+		break;
+
+	case SND_SOC_BIAS_PREPARE:
+		break;
+
+	case SND_SOC_BIAS_STANDBY:
+		break;
+
+	case SND_SOC_BIAS_OFF:
+		break;
+	}
+
+#if 0
+	codec->dapm.bias_level = level;
+#else
+	dapm->bias_level = level;
+#endif
+
+/* This #if directive is intentionally seperate from the one above. */
+#if 0
+	dev_dbg(codec->dev, "%s(): exit\n", __func__);
+#endif
+
+	return ret;
 }
 
 static int es9218_pcm_hw_params(struct snd_pcm_substream *substream,
-        struct snd_pcm_hw_params *params,
-        struct snd_soc_dai *codec_dai)
+				struct snd_pcm_hw_params *params,
+				struct snd_soc_dai *codec_dai)
 {
-    //struct snd_soc_codec    *codec = codec_dai->codec;
-    //struct es9218_priv      *priv  = codec->control_data;
-    int ret = -1;
-    es9218_bps  = params_width(params);
-    es9218_rate = params_rate(params);
+#if 0
+	struct snd_soc_codec *codec = codec_dai->codec;
+	struct es9218_priv *priv = codec->control_data;
+#endif
 
-    pr_info("%s(): entry , bps : %d , rate : %d\n", __func__, es9218_bps, es9218_rate);
+	int ret = -1;
+	es9218_bps = params_width(params);
+	es9218_rate = params_rate(params);
 
-    if (g_dop_flag == 0) { //  PCM
-        pr_info("%s(): PCM Format Running \n", __func__);
-        // set bit width to ESS
-        ret = es9218p_set_bit_width(es9218_bps, ESS_MODE_PCM);
-        ret = es9218p_set_sample_rate(es9218_bps, es9218_rate, ESS_MODE_PCM);
-        // set volume rate to ESS
-        ret = es9218p_set_volume_rate(es9218_rate, ESS_MODE_PCM);
+	pr_info("%s(): entry , bps : %d , rate : %d\n", __func__, es9218_bps,
+		es9218_rate);
 
-#ifdef ENABLE_DOP_AUTO_MUTE
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_04, 0x00);
-        es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_02, 0x34);
-#endif /* ENABLE_DOP_AUTO_MUTE */
-    } else if (g_dop_flag > 0) { // DoP
-        pr_info("%s(): DOP Format Running \n", __func__);
+	/* PCM Playback */
+	if (g_dop_flag == 0) {
+		pr_info("%s(): PCM Format Running \n", __func__);
 
-        // set bit width to ESS
-        ret = es9218p_set_bit_width(g_dop_flag, ESS_MODE_DoP);
-    }
+		/* Set the bit-width to an ESS-advised value. */
+		ret = es9218_set_bit_width(es9218_bps, ESS_MODE_PCM);
+		ret = es9218p_set_sample_rate(es9218_bps, es9218_rate,
+					      ESS_MODE_PCM);
+		/* Set the volume rate to an ESS-advised value. */
+		ret = es9218_set_volume_rate(es9218_rate, ESS_MODE_PCM);
 
-    // changing a mode is done here, so reset mode_changed
+#if ENABLE_DOP_AUTO_MUTE == 1
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_AUTOMUTE_TIME, 0x00);
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_AUTOMUTE_CONFIG, 0x34);
+#endif
+		/* DoP Playback */
+	} else if (g_dop_flag > 0) { // DoP
+		pr_info("%s(): DOP Format Running \n", __func__);
+
+		/* Set the bit-width to an ESS-advised value. */
+		ret = es9218_set_bit_width(g_dop_flag, ESS_MODE_DoP);
+	}
+
+	/* We've finished changing mode here, so reset mode_changed. */
 	mode_changed = 0;
 
 	pr_info("%s(): exit, ret=%d\n", __func__, ret);
 
-    return ret;
+	return ret;
 }
 
 static int es9218_mute(struct snd_soc_dai *dai, int mute)
 {
-    //struct snd_soc_codec *codec = dai->codec;
-    //struct es9218_priv *priv = codec->control_data;
-    u8 reg;
-#ifdef ENABLE_DOP_SOFT_MUTE
-    pr_info("%s(): entry, mute_state = %d , power_state = %s\n", __func__, mute ,power_state[es9218_power_state]);
+#if 0
+	struct snd_soc_codec *codec = dai->codec;
+	struct es9218_priv *priv = codec->control_data;
+#endif
+	uint8_t reg;
+#if ENABLE_DOP_SOFT_MUTE == 1
 
-    if (es9218_power_state < ESS_PS_HIFI) {
-        pr_info("%s() : return = %s\n", __func__, power_state[es9218_power_state]);
-        return 0;
-    }
+	pr_info("%s(): entry, mute_state = %d , power_state = %s\n", __func__,
+		mute, power_state[es9218_power_state]);
 
-	if(mute){
-		reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
-		reg = reg|0x01;
-		es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, reg);
+	if (es9218_power_state < ESS_PS_HIFI) {
+		pr_info("%s() : return = %s\n", __func__,
+			power_state[es9218_power_state]);
+		return 0;
+	}
+
+	if (mute) {
+		reg = es9218_read_reg(g_es9218_priv->i2c_client,
+				      ES9218P_FILTER_BAND_SYSTEM_MUTE);
+		reg |= 0x01;
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_FILTER_BAND_SYSTEM_MUTE, reg);
 	} else {
-		if(g_dop_flag){
+		if (g_dop_flag) {
 			pr_info("%s(): dop add delay\n", __func__);
 			mdelay(10);
 		}
-		reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
+
+		reg = es9218_read_reg(g_es9218_priv->i2c_client,
+				      ES9218P_FILTER_BAND_SYSTEM_MUTE);
 		reg &= ~0x01;
-		es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, reg);
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_FILTER_BAND_SYSTEM_MUTE, reg);
 	}
+
 	mdelay(5);
-#endif /* ENABLE_DOP_SOFT_MUTE */
-    return 0;
+#endif
 
+	return 0;
 }
 
-static int es9218_set_dai_sysclk(struct snd_soc_dai *codec_dai,
-        int clk_id, unsigned int freq, int dir)
+static int es9218_set_dai_sysclk(struct snd_soc_dai *codec_dai, int clk_id,
+				 unsigned int freq, int dir)
 {
-    //struct snd_soc_codec *codec = codec_dai->codec;
-    //struct es9218_priv *priv = codec->control_data;
-    //pr_info("%s(): entry\n", __func__);
+#if 0
+	struct snd_soc_codec *codec = codec_dai->codec;
+	struct es9218_priv *priv = codec->control_data;
+	pr_info("%s(): entry\n", __func__);
+#endif
 
-    return 0;
+	return 0;
 }
-
 
 static int es9218_set_dai_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
 {
-    //struct snd_soc_codec *codec = codec_dai->codec;
-    //struct es9218_priv *priv = codec->control_data;
-    //pr_info("%s(): entry\n", __func__);
+#if 0
+	struct snd_soc_codec *codec = codec_dai->codec;
+	struct es9218_priv *priv = codec->control_data;
+	pr_info("%s(): entry\n", __func__);
+#endif
 
-    return 0;
+	return 0;
+}
+
+static void es9218_switchmode(void)
+{
+	uint8_t reg;
+
+	pr_info("%s() : However, changed a format from/to PCM/DoP(%d -> %d), so need to re-initialize registers !!\n",
+		__func__, prev_dop_flag, g_dop_flag);
+
+	if (g_dop_flag == 0) {
+		/* We've switched to PCM, reinitialise the registers. */
+		es9218p_initialize_registers(ESS_MODE_PCM);
+	} else if (g_dop_flag > 0) {
+#if ENABLE_DOP_SOFT_MUTE == 1
+		reg = es9218_read_reg(g_es9218_priv->i2c_client,
+				      ES9218P_FILTER_BAND_SYSTEM_MUTE);
+		reg |= 0x01;
+		es9218_write_reg(g_es9218_priv->i2c_client,
+				 ES9218P_FILTER_BAND_SYSTEM_MUTE, reg);
+		mdelay(2);
+
+#endif
+		/* We've switched to DoP, reinitialise the registers. */
+		es9218p_initialize_registers(ESS_MODE_DoP);
+	}
 }
 
 static int es9218_startup(struct snd_pcm_substream *substream,
-               struct snd_soc_dai *dai)
+			  struct snd_soc_dai *dai)
 {
-//  struct snd_soc_codec *codec = dai->codec;
-    u8 reg;
-    pr_info("%s(): entry\n", __func__);
+#if 0
+	struct snd_soc_codec *codec = codec_dai->codec;
 
-    mutex_lock(&g_es9218_priv->power_lock);
-    call_common_init_registers = 1;
-
-    cancel_delayed_work_sync(&g_es9218_priv->sleep_work);
-#if defined(CONFIG_ARCH_SM8150)
-    if(pm_qos_request_active(&req)) {
-        pr_info("%s(): pm qos active state. so, remove pm qos request", __func__);
-        pm_qos_remove_request(&req);
-    }
 #endif
-    if ( es9218_power_state == ESS_PS_IDLE ) {
-        pr_info("%s() : state = %s : Audio Active !!\n", __func__, power_state[es9218_power_state]);
-        // check if DoP64 <-> DoP128
-        if( (prev_dop_flag != g_dop_flag) && (prev_dop_flag*g_dop_flag > 0) ) {
-            // do nothing here, after that, will update bit width in es9218_pcm_hw_params().
-            pr_info("%s() : And, changed DoP's bit width from/to DoP64/DoP128(%d -> %d), so don't need to re-initialize registers !!\n",
-                __func__, prev_dop_flag, g_dop_flag);
-        }
-        // check if PCM <-> DoP
-        else if( (prev_dop_flag != g_dop_flag) && (prev_dop_flag*g_dop_flag == 0) ) {
-            pr_info("%s() : However, changed a format from/to PCM/DoP(%d -> %d), so need to re-initialize registers !!\n",
-                __func__, prev_dop_flag, g_dop_flag);
-            if (g_dop_flag == 0) { //  DoP -> PCM
-                // re-init. PCM reg.
-                es9218p_initialize_registers(ESS_MODE_PCM);
-            } else if (g_dop_flag > 0) { //  PCM -> DOP
-#ifdef ENABLE_DOP_SOFT_MUTE
-                reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
-                reg = reg|0x01;
-                es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, reg);
-                mdelay(2);
-#endif /* ENABLE_DOP_SOFT_MUTE */
-                // re-init. DoP reg.
-                es9218p_initialize_registers(ESS_MODE_DoP);
-            }
-        }
-        // check if PCM <-> DoP with mode_changed
-        else if( mode_changed ) {
-            pr_info("%s() : However, changed a format to PCM/DoP(%d) with mode_changed %d, so need to re-initialize registers !!\n",
-                __func__, g_dop_flag, mode_changed);
-            if (g_dop_flag == 0) { //  DoP -> PCM
-                // re-init. PCM reg.
-                es9218p_initialize_registers(ESS_MODE_PCM);
-            } else if (g_dop_flag > 0) { //  PCM -> DOP
-#ifdef ENABLE_DOP_SOFT_MUTE
-                reg = es9218_read_reg(g_es9218_priv->i2c_client, ES9218P_REG_07);
-                reg = reg|0x01;
-                es9218_write_reg(g_es9218_priv->i2c_client, ES9218P_REG_07, reg);
-                mdelay(2);
-#endif /* ENABLE_DOP_SOFT_MUTE */
-                // re-init. DoP reg.
-                es9218p_initialize_registers(ESS_MODE_DoP);
-            }
-        }
+	pr_info("%s(): entry\n", __func__);
 
-        es9218_sabre_audio_active();
-    } else {
-#ifdef CONFIG_SND_SOC_HSDET_L_SWITCH
-        if(!g_es9218_priv->es9218_data->ess_hifi_exception) {
-            pr_info("%s() : state = %s : goto HIFI !!\n", __func__, power_state[es9218_power_state]);
-            if( __es9218_sabre_headphone_on() == 0 )
-                es9218p_sabre_bypass2hifi();
-        } else {
-            pr_info("%s() : ess hifi exception status = %d. state = %s. \n", __func__, g_es9218_priv->es9218_data->ess_hifi_exception, power_state[es9218_power_state]);
-        }
-#else
-        pr_info("%s() : state = %s : goto HIFI !!\n", __func__, power_state[es9218_power_state]);
-        if( __es9218_sabre_headphone_on() == 0 )
-            es9218p_sabre_bypass2hifi();
-#endif
-    }
-    es9218_is_amp_on = 1;
-    es9218_start = 1;
+	mutex_lock(&g_es9218_priv->power_lock);
 
-    pr_info("%s(): exit\n", __func__);
+	call_common_init_registers = 1;
 
-    mutex_unlock(&g_es9218_priv->power_lock);
-    return 0;
+	cancel_delayed_work_sync(&g_es9218_priv->sleep_work);
+	if (pm_qos_request_active(&req)) {
+		pr_info("%s(): pm qos active state. so, remove pm qos request",
+			__func__);
+		pm_qos_remove_request(&req);
+	}
+	if (es9218_power_state == ESS_PS_IDLE) {
+		pr_info("%s() : state = %s : Audio Active !!\n", __func__,
+			power_state[es9218_power_state]);
+		/* Check if we've switched between DoP64 and DoP128. */
+		if ((prev_dop_flag != g_dop_flag) &&
+		    (prev_dop_flag * g_dop_flag > 0)) {
+			pr_info("%s() : And, changed DoP's bit width from/to DoP64/DoP128(%d -> %d), so don't need to re-initialize registers !!\n",
+				__func__, prev_dop_flag, g_dop_flag);
+			/* Check if we've switched between PCM and DoP. */
+		} else if ((prev_dop_flag != g_dop_flag) &&
+			   (prev_dop_flag * g_dop_flag == 0)) {
+			es9218_switchmode();
+			/* Check if we've switched between PCM and DoP using mode_changed. */
+		} else if (mode_changed) {
+			es9218_switchmode();
+		}
+
+		es9218_sabre_audio_active();
+	} else {
+		pr_info("%s() : state = %s : goto HIFI !!\n", __func__,
+			power_state[es9218_power_state]);
+		if (__es9218_sabre_headphone_on() == 0)
+			es9218p_sabre_bypass2hifi();
+	}
+	es9218_is_amp_on = 1;
+	es9218_start = 1;
+
+	pr_info("%s(): exit\n", __func__);
+
+	mutex_unlock(&g_es9218_priv->power_lock);
+
+	return 0;
 }
 
 static void es9218_shutdown(struct snd_pcm_substream *substream,
-               struct snd_soc_dai *dai)
+			    struct snd_soc_dai *dai)
 {
-    struct snd_soc_codec *codec = dai->codec;
+	struct snd_soc_codec *codec = dai->codec;
 
-    mutex_lock(&g_es9218_priv->power_lock);
+	mutex_lock(&g_es9218_priv->power_lock);
 
-    dev_info(codec->dev, "%s(): entry\n", __func__);
+	dev_info(codec->dev, "%s(): entry\n", __func__);
 
-    es9218_sabre_audio_idle();
+	es9218_sabre_audio_idle();
 
-#if defined(CONFIG_ARCH_SM8150)
-    req.type = PM_QOS_REQ_AFFINE_CORES;
-    req.irq = -1;
-    cpumask_copy(&req.cpus_affine, cpu_present_mask);
-#endif
+	req.type = PM_QOS_REQ_AFFINE_CORES;
+	req.irq = -1;
+	cpumask_copy(&req.cpus_affine, cpu_present_mask);
 
-#ifdef ES9218P_DEBUG
+#if ES9218P_DEBUG == 1
 	__pm_wakeup_event(&wl_shutdown, jiffies_to_msecs(10));
-    schedule_delayed_work(&g_es9218_priv->sleep_work, msecs_to_jiffies(10));      //  3 Sec
+	schedule_delayed_work(&g_es9218_priv->sleep_work, msecs_to_jiffies(10));
 #else
-    __pm_wakeup_event(&wl_shutdown, jiffies_to_msecs(5000));
-#if defined(CONFIG_ARCH_SM8150)
-    if(!pm_qos_request_active(&req)) {
-        pr_info("%s(): pm qos nonactive state. so, pm_qos_add_request", __func__);
-        pm_qos_add_request(&req, PM_QOS_CPU_DMA_LATENCY, 0);
-    }
-#endif
-    schedule_delayed_work(&g_es9218_priv->sleep_work, msecs_to_jiffies(3000));      //  3 Sec
+	__pm_wakeup_event(&wl_shutdown, jiffies_to_msecs(5000));
+
+	if (!pm_qos_request_active(&req)) {
+		pr_info("%s(): pm qos nonactive state. so, pm_qos_add_request",
+			__func__);
+		pm_qos_add_request(&req, PM_QOS_CPU_DMA_LATENCY, 0);
+	}
+
+	schedule_delayed_work(&g_es9218_priv->sleep_work,
+			      msecs_to_jiffies(2000));
 #endif
 
-    es9218_start = 0;
-    mutex_unlock(&g_es9218_priv->power_lock);
+	es9218_start = 0;
+	mutex_unlock(&g_es9218_priv->power_lock);
 }
 
 static int es9218_hw_free(struct snd_pcm_substream *substream,
-               struct snd_soc_dai *dai)
+			  struct snd_soc_dai *dai)
 {
-    struct snd_soc_codec *codec = dai->codec;
+	struct snd_soc_codec *codec = dai->codec;
 
-    mdelay(20);
-    dev_info(codec->dev, "%s(): entry\n", __func__);
+	dev_info(codec->dev, "%s(): entry\n", __func__);
 
-    return 0;
+	return 0;
 }
 
-
 static const struct snd_soc_dai_ops es9218_dai_ops = {
-    .hw_params      = es9218_pcm_hw_params,  //soc_dai_hw_params
-    .digital_mute   = es9218_mute,
-    .set_fmt        = es9218_set_dai_fmt,
-    .set_sysclk     = es9218_set_dai_sysclk,
-    .startup        = es9218_startup,
-    .shutdown       = es9218_shutdown,
-    .hw_free        = es9218_hw_free,
+	.hw_params		= es9218_pcm_hw_params,
+	.digital_mute		= es9218_mute,
+	.set_fmt		= es9218_set_dai_fmt,
+	.set_sysclk		= es9218_set_dai_sysclk,
+	.startup		= es9218_startup,
+	.shutdown		= es9218_shutdown,
+	.hw_free		= es9218_hw_free,
 };
 
 static struct snd_soc_dai_driver es9218_dai[] = {
-    {
-        .name   = "es9218-hifi",
-        .playback = {
-            .stream_name    = "Playback",
-            .channels_min   = 2,
-            .channels_max   = 2,
-            .rates          = ES9218_RATES,
-            .formats        = ES9218_FORMATS,
-        },
-        .capture = {
-            .stream_name    = "Capture",
-            .channels_min   = 2,
-            .channels_max   = 2,
-            .rates          = ES9218_RATES,
-            .formats        = ES9218_FORMATS,
-        },
-        .ops = &es9218_dai_ops,
-    },
-};
-
-static  int es9218_codec_probe(struct snd_soc_codec *codec)
-{
-    struct es9218_priv *priv = snd_soc_codec_get_drvdata(codec);
-
-    pr_notice("%s(): entry\n", __func__);
-
-    if (priv)
-        priv->codec = codec;
-    else
-        pr_err("%s(): fail !!!!!!!!!!\n", __func__);
-
-    codec->control_data = snd_soc_codec_get_drvdata(codec);
-	wakeup_source_init(&wl_sleep, "sleep_lock");
-	wakeup_source_init(&wl_shutdown, "shutdown_lock");
-    es9218_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
-
-    pr_notice("%s(): exit \n", __func__);
-    return 0;
-}
-
-static int  es9218_codec_remove(struct snd_soc_codec *codec)
-{
-    es9218_set_bias_level(codec, SND_SOC_BIAS_OFF);
-    return 0;
-}
-
-static struct snd_soc_codec_driver soc_codec_dev_es9218 = {
-    .probe          = es9218_codec_probe,
-    .remove         = es9218_codec_remove,
-    .read           = es9218_codec_read,
-    .write          = es9218_codec_write,
-	.component_driver = {
-    	.controls       = es9218_digital_ext_snd_controls,
-    	.num_controls   = ARRAY_SIZE(es9218_digital_ext_snd_controls),
+	{
+		.name	= "es9218-hifi",
+		.playback = {
+			.stream_name	= "Playback",
+			.channels_min	= 2,
+			.channels_max	= 2,
+			.rates		= ES9218_RATES,
+			.formats	= ES9218_FORMATS,
+		},
+		.capture = {
+			.stream_name	= "Capture",
+			.channels_min	= 2,
+			.channels_max	= 2,
+			.rates		= ES9218_RATES,
+			.formats	= ES9218_FORMATS,
+		},
+		.ops	= &es9218_dai_ops,
 	},
 };
 
-
-static int es9218_probe(struct i2c_client *client,const struct i2c_device_id *id)
+static int es9218_codec_probe(struct snd_soc_codec *codec)
 {
-    struct es9218_priv  *priv;
-    struct es9218_data  *pdata;
-    int ret = 0;
+	struct es9218_priv *priv = snd_soc_codec_get_drvdata(codec);
 
-    pr_info("%s: enter.\n", __func__);
+	pr_notice("%s(): entry\n", __func__);
 
-    if (!i2c_check_functionality(client->adapter,
-                I2C_FUNC_SMBUS_BYTE_DATA)) {
-        pr_err("%s: no support for i2c read/write byte data\n", __func__);
-        return -EIO;
-    }
+	if (priv)
+		priv->codec = codec;
+	else
+		pr_err("%s(): fail !!!!!!!!!!\n", __func__);
 
-    if (client->dev.of_node) {
-        pdata = devm_kzalloc(&client->dev,
-                sizeof(struct es9218_data), GFP_KERNEL);
-        if (!pdata) {
-            pr_err("Failed to allocate memory\n");
-            return -ENOMEM;
-        }
+	codec->control_data = snd_soc_codec_get_drvdata(codec);
 
-        ret = es9218_populate_get_pdata(&client->dev, pdata);
-        if (ret) {
-            pr_err("Parsing DT failed(%d)", ret);
-            return ret;
-        }
-    } else {
-        pdata = client->dev.platform_data;
-    }
+	wakeup_source_init(&wl_sleep, "sleep_lock");
+	wakeup_source_init(&wl_shutdown, "shutdown_lock");
+	es9218_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 
-    if (!pdata) {
-        pr_err("%s: no platform data\n", __func__);
-        return -EINVAL;
-    }
+	pr_notice("%s(): exit \n", __func__);
 
-    priv = devm_kzalloc(&client->dev, sizeof(struct es9218_priv),
-            GFP_KERNEL);
-    if (priv == NULL) {
-        return -ENOMEM;
-    }
+	return 0;
+}
 
-    priv->i2c_client = client;
-    priv->es9218_data = pdata;
-    i2c_set_clientdata(client, priv);
+static int es9218_codec_remove(struct snd_soc_codec *codec)
+{
+	es9218_set_bias_level(codec, SND_SOC_BIAS_OFF);
 
-    g_es9218_priv = priv;
-    INIT_DELAYED_WORK(&g_es9218_priv->hifi_in_standby_work, es9218_sabre_hifi_in_standby_work);
-    INIT_DELAYED_WORK(&g_es9218_priv->sleep_work, es9218_sabre_sleep_work);
+	return 0;
+}
 
-    mutex_init(&g_es9218_priv->power_lock);
+static struct snd_soc_codec_driver soc_codec_dev_es9218 = {
+	.probe		= es9218_codec_probe,
+	.remove		= es9218_codec_remove,
+	.read		= es9218_codec_read,
+	.write		= es9218_codec_write,
+	.component_driver = {
+		.controls	= es9218_digital_ext_snd_controls,
+		.num_controls	= ARRAY_SIZE(es9218_digital_ext_snd_controls),
+	},
+};
+
+static int es9218_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
+{
+	struct es9218_priv *priv;
+	struct es9218_data *pdata;
+	int ret = 0;
+
+	pr_info("%s: enter.\n", __func__);
+
+	if (!i2c_check_functionality(client->adapter,
+				     I2C_FUNC_SMBUS_BYTE_DATA)) {
+		pr_err("%s: no support for i2c read/write byte data\n",
+		       __func__);
+
+		return -EIO;
+	}
+
+	if (client->dev.of_node) {
+		pdata = devm_kzalloc(&client->dev, sizeof(struct es9218_data),
+				     GFP_KERNEL);
+		if (!pdata) {
+			pr_err("Failed to allocate memory\n");
+
+			return -ENOMEM;
+		}
+
+		ret = es9218_populate_get_pdata(&client->dev, pdata);
+		if (ret) {
+			pr_err("Parsing DT failed(%d)", ret);
+
+			return ret;
+		}
+	} else {
+		pdata = client->dev.platform_data;
+	}
+
+	if (!pdata) {
+		pr_err("%s: no platform data\n", __func__);
+
+		return -EINVAL;
+	}
+
+	priv = devm_kzalloc(&client->dev, sizeof(struct es9218_priv),
+			    GFP_KERNEL);
+	if (priv == NULL) {
+		return -ENOMEM;
+	}
+
+	priv->i2c_client = client;
+	priv->es9218_data = pdata;
+	i2c_set_clientdata(client, priv);
+
+	g_es9218_priv = priv;
+	INIT_DELAYED_WORK(&g_es9218_priv->hifi_in_standby_work,
+			  es9218_sabre_hifi_in_standby_work);
+	INIT_DELAYED_WORK(&g_es9218_priv->sleep_work, es9218_sabre_sleep_work);
+
+	mutex_init(&g_es9218_priv->power_lock);
 #if 0
-    ret = gpio_request_one(pdata->ear_dbg, GPIOF_IN,"gpio_earjack_debugger");
-    if (ret < 0) {
-        pr_err("%s(): debugger gpio request failed\n", __func__);
-        goto ear_dbg_gpio_request_error;
-    }
-    pr_info("%s: ear dbg. gpio num : %d, value : %d!\n",
-        __func__, pdata->ear_dbg, gpio_get_value(pdata->ear_dbg));
+	ret = gpio_request_one(pdata->ear_dbg, GPIOF_IN,"gpio_earjack_debugger");
+	if (ret < 0) {
+		pr_err("%s(): debugger gpio request failed\n", __func__);
+		goto ear_dbg_gpio_request_error;
+	}
+	pr_info("%s: ear dbg. gpio num : %d, value : %d!\n",
+		__func__, pdata->ear_dbg, gpio_get_value(pdata->ear_dbg));
 #endif
 
-    ret = gpio_request(pdata->power_gpio, "ess_power");
-    if (ret < 0) {
-        pr_err("%s(): ess power request failed\n", __func__);
-        goto power_gpio_request_error;
-    }
-    ret = gpio_direction_output(pdata->power_gpio, 1);
-    if (ret < 0) {
-        pr_err("%s: ess power set failed\n", __func__);
-        goto power_gpio_request_error;
-    }
-    gpio_set_value(pdata->power_gpio, 0);
+	ret = gpio_request(pdata->power_gpio, "ess_power");
+	if (ret < 0) {
+		pr_err("%s(): ess power request failed\n", __func__);
+		goto power_gpio_request_error;
+	}
 
-    ret = gpio_request(pdata->hph_switch, "ess_switch");
-    if (ret < 0) {
-        pr_err("%s(): ess switch request failed\n", __func__);
-        goto switch_gpio_request_error;
-    }
-    ret = gpio_direction_output(pdata->hph_switch, 1);
-    if (ret < 0) {
-        pr_err("%s: ess switch set failed\n", __func__);
-        goto switch_gpio_request_error;
-    }
-    gpio_set_value(pdata->hph_switch, 0);
+	ret = gpio_direction_output(pdata->power_gpio, 1);
+	if (ret < 0) {
+		pr_err("%s: ess power set failed\n", __func__);
+		goto power_gpio_request_error;
+	}
 
-    ret = gpio_request(pdata->reset_gpio, "ess_reset");
-    if (ret < 0) {
-        pr_err("%s(): ess reset request failed\n", __func__);
-        goto reset_gpio_request_error;
-    }
-    ret = gpio_direction_output(pdata->reset_gpio, 1);
-    if (ret < 0) {
-        pr_err("%s: ess reset set failed\n", __func__);
-        goto reset_gpio_request_error;
-    }
-    gpio_set_value(pdata->reset_gpio, 0);
+	gpio_set_value(pdata->power_gpio, 0);
 
-#ifdef CONFIG_SND_SOC_HSDET_L_SWITCH
-    if (pdata->switch_gpio >= 0) {
-        pr_info("%s: request msm switch gpio [%d] \n", __func__, pdata->switch_gpio);
+	ret = gpio_request(pdata->hph_switch, "ess_switch");
+	if (ret < 0) {
+		pr_err("%s(): ess switch request failed\n", __func__);
+		goto switch_gpio_request_error;
+	}
 
-        ret = gpio_request(pdata->switch_gpio, "hsdet_l_switch");
-        if (ret < 0) {
-            pr_err("%s(): msm switch request failed\n", __func__);
-            goto hsdet_l_switch_gpio_request_error;
-        }
-        ret = gpio_direction_output(pdata->switch_gpio, 1);
-        if (ret < 0) {
-            pr_err("%s: msm switch set failed\n", __func__);
-            goto hsdet_l_switch_gpio_request_error;
-        }
-        gpio_set_value(pdata->switch_gpio, 0);
-    }
-    pdata->ess_hifi_exception = false;
+	ret = gpio_direction_output(pdata->hph_switch, 1);
+	if (ret < 0) {
+		pr_err("%s: ess switch set failed\n", __func__);
+		goto switch_gpio_request_error;
+	}
+
+	gpio_set_value(pdata->hph_switch, 0);
+
+	ret = gpio_request(pdata->reset_gpio, "ess_reset");
+	if (ret < 0) {
+		pr_err("%s(): ess reset request failed\n", __func__);
+		goto reset_gpio_request_error;
+	}
+
+	ret = gpio_direction_output(pdata->reset_gpio, 1);
+	if (ret < 0) {
+		pr_err("%s: ess reset set failed\n", __func__);
+		goto reset_gpio_request_error;
+	}
+
+	gpio_set_value(pdata->reset_gpio, 0);
+
+	ret = snd_soc_register_codec(&client->dev, &soc_codec_dev_es9218,
+				     es9218_dai, ARRAY_SIZE(es9218_dai));
+
+#if ES9218P_SYSFS == 1
+	ret = sysfs_create_group(&client->dev.kobj, &es9218_attr_group);
 #endif
-#ifdef ES9219C
-    if (g_es9218_priv->es9218_data->is_es9219c) {
-        es9218_chip_revision_get();
-    }
-#endif
-    ret = snd_soc_register_codec(&client->dev,
-                      &soc_codec_dev_es9218,
-                      es9218_dai, ARRAY_SIZE(es9218_dai));
+	if (lge_get_boot_mode() == LGE_BOOT_MODE_CHARGERLOGO) {
+		pr_info("%s chargerlogo mode call chargerlogo_chipstate_get function\n",
+			__func__);
+		chargerlogo_chipstate_get();
+	}
 
-#ifdef ES9218P_SYSFS
-    ret = sysfs_create_group(&client->dev.kobj, &es9218_attr_group);
-#endif
-    if(lge_get_boot_mode() == LGE_BOOT_MODE_CHARGERLOGO){
-       pr_info("%s chargerlogo mode call chargerlogo_chipstate_get function\n",__func__);
-       chargerlogo_chipstate_get();
-    }
-    pr_info("%s: snd_soc_register_codec ret = %d\n",__func__, ret);
-    return ret;
+	pr_info("%s: snd_soc_register_codec ret = %d\n", __func__, ret);
+
+	return ret;
 
 switch_gpio_request_error:
-    gpio_free(pdata->hph_switch);
+	gpio_free(pdata->hph_switch);
 reset_gpio_request_error:
-    gpio_free(pdata->reset_gpio);
+	gpio_free(pdata->reset_gpio);
 power_gpio_request_error:
-    gpio_free(pdata->power_gpio);
-#ifdef CONFIG_SND_SOC_HSDET_L_SWITCH
-hsdet_l_switch_gpio_request_error:
-    gpio_free(pdata->switch_gpio);
-#endif
+	gpio_free(pdata->power_gpio);
 #if 0
 ear_dbg_gpio_request_error:
-    gpio_free(pdata->ear_dbg);
+	gpio_free(pdata->ear_dbg);
 #endif
-    return ret;
-
+	return ret;
 }
 
 static int es9218_remove(struct i2c_client *client)
 {
-#ifdef USE_CONTROL_EXTERNAL_LDO_FOR_DVDD
-    struct es9218_data  *pdata;
-    pdata = (struct es9218_data*)i2c_get_clientdata(client);    //pdata = (struct es9218_data*)client->dev.driver_data;
-    if( pdata->vreg_dvdd != NULL )
-        regulator_put(pdata->vreg_dvdd);
+#if USE_CONTROL_EXTERNAL_LDO_FOR_DVDD == 1
+	struct es9218_data *pdata;
+
+	pdata = (struct es9218_data *)i2c_get_clientdata(client);
+	if (pdata->vreg_dvdd != NULL)
+		regulator_put(pdata->vreg_dvdd);
 #endif
-    snd_soc_unregister_codec(&client->dev);
-    mutex_destroy(&g_es9218_priv->power_lock);
-    return 0;
+	snd_soc_unregister_codec(&client->dev);
+	mutex_destroy(&g_es9218_priv->power_lock);
+
+	return 0;
 }
 
 static struct of_device_id es9218_match_table[] = {
-    { .compatible = "dac,es9218-codec", },
-    {}
+	{
+		.compatible = "dac,es9218-codec",
+	},
+	{}
 };
 
 static const struct i2c_device_id es9218_id[] = {
-    { "es9218-codec", 0 },
-    { },
+	{ "es9218-codec", 0 },
+	{},
 };
 
-//MODULE_DEVICE_TABLE(i2c, isa1200_id);
 MODULE_DEVICE_TABLE(i2c, es9218_id);
 
 static struct i2c_driver es9218_i2c_driver = {
-    .driver = {
-        .name           = "es9218-codec",
-        .owner          = THIS_MODULE,
-        .of_match_table = es9218_match_table,
-    },
-    .probe      = es9218_probe,
-    .remove     = es9218_remove,
-    //.suspend  = es9218_suspend,
-    //.resume   = es9218_resume,
-    .id_table   = es9218_id,
+	.driver	= {
+		.name		= "es9218-codec",
+		.owner		= THIS_MODULE,
+		.of_match_table	= es9218_match_table,
+	},
+	.probe		= es9218_probe,
+	.remove		= es9218_remove,
+	.id_table	= es9218_id,
 };
-
-
 
 static int __init es9218_init(void)
 {
-    pr_notice("%s()\n", __func__);
-    return i2c_add_driver(&es9218_i2c_driver);
+	pr_notice("%s()\n", __func__);
+
+	return i2c_add_driver(&es9218_i2c_driver);
 }
 
 static void __exit es9218_exit(void)
 {
-    i2c_del_driver(&es9218_i2c_driver);
+	i2c_del_driver(&es9218_i2c_driver);
 }
 
 module_init(es9218_init);

@@ -161,7 +161,6 @@ struct tfa98xx_handle_private {
 #if defined(TFADSP_DSP_BUFFER_POOL)
 	struct tfa98xx_buffer_pool buf_pool[POOL_MAX_INDEX];
 #endif
-	int individual_msg;
 };
 
 

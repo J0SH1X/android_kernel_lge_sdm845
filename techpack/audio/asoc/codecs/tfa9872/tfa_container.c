@@ -873,10 +873,6 @@ tfa_cont_write_file(int dev_idx,
 		size = hdr->size - sizeof(struct tfa_msg_file);
 		err = dsp_msg(dev_idx, size,
 			(const char *)((struct tfa_msg_file *)hdr)->data);
-
-		/* reset bypass flag after writing msg */
-		if (err == TFA98XX_ERROR_OK)
-			handles_local[dev_idx].is_bypass = 0;
 		break;
 	case volstep_hdr:
 		if (tfa98xx_dev_family(dev_idx) == 2)
@@ -890,7 +886,7 @@ tfa_cont_write_file(int dev_idx,
 				(struct tfa_volume_step2_file *)hdr,
 				vstep_idx);
 
-		/* reset bypass flag and set current vstep after writing vstep */
+		/* If writing the vstep was succesful, set new current vstep */
 		if (err == TFA98XX_ERROR_OK) {
 			handles_local[dev_idx].is_bypass = 0;
 			tfa_cont_set_current_vstep(dev_idx, vstep_idx);
@@ -1691,16 +1687,6 @@ unsigned int tfa98xx_get_profile_sr(int dev_idx, unsigned int prof_idx)
 	if (!dev)
 		return 0;
 
-	if (prof_idx == -1) { /* refer to prof in other device */
-		for (i = 0; i < tfa98xx_cnt_max_device(); i++) {
-			if (i == dev_idx)
-				continue;
-			if (handles_local[i].profile != -1) {
-				prof_idx = handles_local[i].profile;
-				break;
-			}
-		}
-	}
 	prof = tfa_cont_profile(dev_idx, prof_idx);
 	if (!prof)
 		return 0;
@@ -1772,16 +1758,6 @@ unsigned int tfa98xx_get_profile_chsa(int dev_idx, unsigned int prof_idx)
 	if (!dev)
 		return 0;
 
-	if (prof_idx == -1) { /* refer to prof in other device */
-		for (i = 0; i < tfa98xx_cnt_max_device(); i++) {
-			if (i == dev_idx)
-				continue;
-			if (handles_local[i].profile != -1) {
-				prof_idx = handles_local[i].profile;
-				break;
-			}
-		}
-	}
 	prof = tfa_cont_profile(dev_idx, prof_idx);
 	if (!prof)
 		return 0;
@@ -1854,16 +1830,6 @@ unsigned int tfa98xx_get_profile_tdmspks(int dev_idx, unsigned int prof_idx)
 	if (!dev)
 		return 0;
 
-	if (prof_idx == -1) { /* refer to prof in other device */
-		for (i = 0; i < tfa98xx_cnt_max_device(); i++) {
-			if (i == dev_idx)
-				continue;
-			if (handles_local[i].profile != -1) {
-				prof_idx = handles_local[i].profile;
-				break;
-			}
-		}
-	}
 	prof = tfa_cont_profile(dev_idx, prof_idx);
 	if (!prof)
 		return 0;
@@ -2942,13 +2908,11 @@ enum tfa98xx_error tfa_set_filters(int dev_idx, int prof_idx)
 int tfa_tib_dsp_msgblob(int devidx, int length, const char *buffer)
 {
 	uint8_t *buf = (uint8_t *)buffer;
-	static uint8_t *blob = NULL, *blobptr;
+	static uint8_t *blob=0, *blobptr;
 #if defined(TFADSP_DSP_BUFFER_POOL)
 	static int blob_p_index = -1;
 #endif
-	static int total = 0;
-	uint8_t cmd, cc;
-
+	static int total;
 
 	/* No data found*/
 #if defined(TFADSP_DSP_BUFFER_POOL)
@@ -2966,11 +2930,9 @@ int tfa_tib_dsp_msgblob(int devidx, int length, const char *buffer)
 	if (devidx == -1)
 #endif
 	{
-		/* add total - specially merged fom legacy */
 		blob[2] = (uint8_t)(total>>8); // msb
 		blob[3] = (uint8_t)total; // lsb
 		total += 4;
-
 		memcpy(buf, blob, total); //+ header: 'mm' | size
 #if defined(TFADSP_DSP_BUFFER_POOL)
 		if (blob_p_index != -1) {
@@ -2982,18 +2944,12 @@ int tfa_tib_dsp_msgblob(int devidx, int length, const char *buffer)
 		}
 #else
 		kfree(blob);
-#endif /* TFADSP_DSP_BUFFER_POOL */
-		blob = NULL; /* Set to NULL pointer, otherwise no new malloc is done! */
+#endif // TFADSP_DSP_BUFFER_POOL
+		blob=0; /* Set back to 0 otherwise no new malloc is done! */
 		return total;
 	}
 
-	/* Flush buffer */
 	if (length == -2) {
-		if (blob == NULL) {
-			pr_info("%s: already flushed - NULL\n", __func__);
-			return 0;
-		}
-
 #if defined(TFADSP_DSP_BUFFER_POOL)
 		if (blob_p_index != -1) {
 			tfa98xx_buffer_pool_access
@@ -3005,40 +2961,39 @@ int tfa_tib_dsp_msgblob(int devidx, int length, const char *buffer)
 #else
 		kfree(blob);
 #endif /* TFADSP_DSP_BUFFER_POOL */
-		blob = NULL; /* Set NULL pointer, otherwise no new malloc is done! */
+		blob = 0; /* Set back to 0 otherwise no new malloc is done! */
 		return 0;
 	}
 
-	/* Allocate buffer */
-	if (blob == NULL) {
+	if (blob==0) {
 		if (tfa98xx_cnt_verbose)
 			pr_debug("%s, Creating the multi-message\n", __func__);
 
 #if defined(TFADSP_DSP_BUFFER_POOL)
 		blob_p_index = tfa98xx_buffer_pool_access
-			(devidx, -1, 64 * 1024, POOL_GET);
+			(devidx, -1, 64*1024, POOL_GET);
 		if (blob_p_index != -1) {
 			pr_debug("%s: allocated from buffer_pool[%d]\n",
 				__func__, blob_p_index);
 			blob = (uint8_t *)(handles_local[devidx]
 				.buf_pool[blob_p_index].pool);
 		} else {
-			blob = kmalloc(64 * 1024, GFP_KERNEL);
+			blob = kmalloc(64*1024, GFP_KERNEL); //max length is 64k
 			/* max length is 64k */
 			if (blob == NULL)
 				goto msgblob_error_exit;
 		}
 #else
-		blob = kmalloc(64 * 1024, GFP_KERNEL);
+		blob = kmalloc(64*1024, GFP_KERNEL); //max length is 64k
 		/* max length is 64k */
 		if (blob == NULL)
 			goto msgblob_error_exit;
-#endif /* TFADSP_DSP_BUFFER_POOL */
+#endif // TFADSP_DSP_BUFFER_POOL
 		blobptr = blob;
 		*blobptr++ = 'm'; //'mm' = multi message
 		*blobptr++ = 'm';
-		blobptr += 2; // size comes here
-		total = 0;
+		blobptr+=2; // size comes here
+		total=0;
 		if (tfa98xx_cnt_verbose)
 			pr_debug("\n");
 	}
@@ -3047,68 +3002,48 @@ int tfa_tib_dsp_msgblob(int devidx, int length, const char *buffer)
 		pr_debug("%s, id:0x%02x%02x%02x, length:%d\n",
 			__func__, buf[0], buf[1], buf[2], length);
 
-	*blobptr++ = (uint8_t)(length>>8); // msb
-	*blobptr++ = (uint8_t)length; // lsb
+	*blobptr++ = (uint8_t)(length>>8); //msb
+	*blobptr++ = (uint8_t)length; //lsb
 	memcpy(blobptr, buf, length);
 	blobptr += length;
-	total += length + 2; // +counters
+	total += length+2; //+counters
 
 	/* SetRe25 message is always the last message of the multi-msg */
 	pr_debug("%s: length (%d), [0]=0x%x-[1]=0x%x-[2]=0x%x\n",
-		__func__, length, buf[0], buf[1], buf[2]);
-
-	cmd = buf[0]; // 32-bit format (if not, buf[2])
-	cc = buf[2]; // 32-bit format (if not, buf[0])
-
-	if (handles_local[devidx].individual_msg) {
-		pr_debug("%s: set last message for individual call: cmd=%d\n",
-			__func__, cmd);
-		handles_local[devidx].individual_msg = 0; /* reset flag */
-		return 1; /* 1 means last message is done! */
-	}
-	
-	if (cmd == SB_PARAM_SET_RE25C && buf[1] == 0x81) {
-		pr_debug("%s: found last message - sending: Re25C cmd=%d\n",
-			__func__, cmd);
-		return 1; /* 1 means last message is done! */
-	}
-
+	__func__, length, buf[0], buf[1], buf[2]);
 	/* if (buf[1] == 0x81 && buf[2] == SB_PARAM_SET_RE25C) { */
-	if ((cmd == FW_PAR_ID_GET_MEMORY && buf[1] == 0x80)
-		|| (cmd == FW_PAR_ID_GLOBAL_GET_INFO && buf[1] == 0x80)
-		|| (cmd == FW_PAR_ID_GET_FEATURE_INFO && buf[1] == 0x80)
-		|| (cmd == FW_PAR_ID_GET_MEMTRACK && buf[1] == 0x80)
-		|| (cmd == FW_PAR_ID_GET_STATUS_CHANGE && buf[1] == 0x80)
-		|| (cmd == FW_PAR_ID_GET_LIBRARY_VERSION && buf[1] == 0x80)
-		|| (cmd == FW_PAR_ID_GET_API_VERSION && buf[1] == 0x80)
-		|| (cmd == FW_PAR_ID_GET_TAG && buf[1] == 0x80)
-		|| (cmd == BFB_PAR_ID_GET_COEFS && buf[1] == 0x82)
-		|| (cmd == BFB_PAR_ID_GET_CONFIG && buf[1] == 0x82)) {
-		pr_debug("%s: found last message - sending: cmd=%d\n",
-			__func__, cmd);
+	if ((buf[0] == SB_PARAM_SET_RE25C && buf[1] == 0x81 && buf[2] == 0x00)
+		|| (buf[0] == FW_PAR_ID_GET_MEMORY && buf[1] == 0x80)
+		|| (buf[0] == FW_PAR_ID_GLOBAL_GET_INFO && buf[1] == 0x80)
+		|| (buf[0] == FW_PAR_ID_GET_FEATURE_INFO && buf[1] == 0x80)
+		|| (buf[0] == FW_PAR_ID_GET_MEMTRACK && buf[1] == 0x80)
+		|| (buf[0] == FW_PAR_ID_GET_TAG && buf[1] == 0x80)
+		|| (buf[0] == FW_PAR_ID_GET_API_VERSION && buf[1] == 0x80)
+		|| (buf[0] == FW_PAR_ID_GET_STATUS_CHANGE && buf[1] == 0x80)
+		|| (buf[0] == BFB_PAR_ID_GET_COEFS && buf[1] == 0x82)
+		|| (buf[0] == BFB_PAR_ID_GET_CONFIG && buf[1] == 0x82)) {
+		pr_debug("%s: found last message - sending: buf[0]=%d\n",
+		__func__, buf[0]);
 		return 1; /* 1 means last message is done! */
 	}
 
-	if ((cmd == SB_PARAM_GET_ALGO_PARAMS && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_LAGW && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_RE25C && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_LSMODEL && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_MBDRC && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_MBDRC_DYNAMICS && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_EXCURSION_FILTERS && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_XMODEL_COEFFS && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_DATA_LOGGER && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_POWER_SAVER && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_Z_FILTER && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_X_FILTER && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_STATE && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_XMODEL && buf[1] == 0x81)
-		|| (cmd == SB_PARAM_GET_TAG && buf[1] == 0x81)) {
-		pr_debug("%s: found last message - sending: cmd=%d CC=%d\n",
-			__func__, cmd, cc);
+	if ((buf[0] == SB_PARAM_GET_ALGO_PARAMS && buf[1] == 0x81)
+		|| (buf[0] == SB_PARAM_GET_LAGW && buf[1] == 0x81)
+		|| (buf[0] == SB_PARAM_GET_RE25C && buf[1] == 0x81)
+		|| (buf[0] == SB_PARAM_GET_LSMODEL && buf[1] == 0x81)
+		|| (buf[0] == SB_PARAM_GET_MBDRC && buf[1] == 0x81)
+		|| (buf[0] == SB_PARAM_GET_MBDRC_DYNAMICS && buf[1] == 0x81)
+		|| (buf[0] == SB_PARAM_GET_EXCURSION_FILTERS && buf[1] == 0x81)
+		|| (buf[0] == SB_PARAM_GET_TAG && buf[1] == 0x81)
+		|| (buf[0] == SB_PARAM_GET_STATE && buf[1] == 0x81)
+		|| (buf[0] == SB_PARAM_GET_XMODEL && buf[1] == 0x81)
+		|| (buf[0] == SB_PARAM_GET_XMODEL_COEFFS && buf[1] == 0x81)) {
+		pr_debug("%s: found last message - sending: buf[0]=%d CC=%d\n",
+		__func__, buf[0], buf[2]);
 		return 1; /* 1 means last message is done! with CC check */
 	}
 	
+
 	return 0;
 
 msgblob_error_exit:

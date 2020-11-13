@@ -136,17 +136,12 @@ static enum tfa98xx_exception_case
 #ifdef CONFIG_SND_LGE_TX_NXP_LIB
 struct extcon_dev *edev;
 static const unsigned int tfa98xx_cable[] = {
-	EXTCON_MECHANICAL,
+    EXTCON_MECHANICAL,
 	EXTCON_NONE,
 };
 #endif
 
 static DEFINE_MUTEX(probe_lock);
-
-#if defined(CONFIG_SND_SOC_SMA6101)
-#define TFA9872_STATUS_INACTIVE 0
-#define TFA9872_STATUS_ACTIVE 1
-#endif
 
 static char *dflt_prof_name = "";
 module_param(dflt_prof_name, charp, S_IRUGO);
@@ -183,6 +178,7 @@ static int get_profile_id_for_sr(int id, unsigned int rate);
 static int _tfa98xx_mute(struct tfa98xx *tfa98xx, int mute, int stream);
 static int _tfa98xx_stop(struct tfa98xx *tfa98xx);
 static void _tfa_set_saam_select(int saam_select);
+
 
 struct tfa98xx_rate {
 	unsigned int rate;
@@ -1206,11 +1202,8 @@ static ssize_t tfa98xx_dbgfs_rpc_read(struct file *file,
 		return ret;
 	}
 
-	pr_info("%s called\n", __func__);
 	mutex_lock(&tfa98xx->dsp_lock);
-	handles_local[tfa98xx->handle].individual_msg = 1;
 	error = dsp_msg_read(tfa98xx->handle, count, buffer);
-	handles_local[tfa98xx->handle].individual_msg = 0;
 	mutex_unlock(&tfa98xx->dsp_lock);
 	if (error) {
 		pr_debug("[0x%x] dsp_msg_read error: %d\n",
@@ -1258,34 +1251,22 @@ static ssize_t tfa98xx_dbgfs_rpc_send(struct file *file,
 		return -EFAULT;
 	}
 
-	pr_info("%s called\n", __func__);
 	mutex_lock(&tfa98xx->dsp_lock);
-	handles_local[tfa98xx->handle].individual_msg = 1;
 	if ((msg_file->data[0] == 'M') && (msg_file->data[1] == 'G')) {
-		/* int vstep_idx, int vstep_msg_idx both 0 */
-		error = tfa_cont_write_file(tfa98xx->handle,
-			msg_file, 0, 0); 
-		if (error) {
+		error = tfa_cont_write_file(tfa98xx->handle, msg_file, 0, 0); /* int vstep_idx, int vstep_msg_idx both 0 */
+		if (error)
 			pr_debug("[0x%x] tfa_cont_write_file error: %d\n",
 				tfa98xx->i2c->addr, error);
-			ret = -EIO;
-		}
 	} else {
 		error = dsp_msg
 			(tfa98xx->handle, msg_file->size, msg_file->data);
-		if (error) {
+		if (error)
 			pr_debug("[0x%x] dsp_msg error: %d\n",
 				tfa98xx->i2c->addr, error);
-			ret = -EIO;
-		}
 	}
-	handles_local[tfa98xx->handle].individual_msg = 0;
 	mutex_unlock(&tfa98xx->dsp_lock);
 
 	kfree(msg_file);
-
-	if (ret)
-		return ret;
 
 	return count;
 }
@@ -1318,11 +1299,8 @@ static ssize_t tfa98xx_dbgfs_dsp_read(struct file *file,
 		return ret;
 	}
 
-	pr_info("%s called\n", __func__);
 	mutex_lock(&tfa98xx->dsp_lock);
-	handles_local[tfa98xx->handle].individual_msg = 1;
 	error = dsp_msg_read(tfa98xx->handle, count, buffer);
-	handles_local[tfa98xx->handle].individual_msg = 0;
 	mutex_unlock(&tfa98xx->dsp_lock);
 	if (error) {
 		pr_debug("[0x%x] dsp_msg_read error: %d\n",
@@ -1379,11 +1357,8 @@ static ssize_t tfa98xx_dbgfs_dsp_write(struct file *file,
 		return -EFAULT;
 	}
 
-	pr_info("%s called\n", __func__);
 	mutex_lock(&tfa98xx->dsp_lock);
-	handles_local[tfa98xx->handle].individual_msg = 1;
 	error = dsp_msg(tfa98xx->handle, count, buffer);
-	handles_local[tfa98xx->handle].individual_msg = 0;
 	mutex_unlock(&tfa98xx->dsp_lock);
 	if (error) {
 		pr_debug("[0x%x] dsp_msg error: %d\n",
@@ -1868,7 +1843,7 @@ static int tfa98xx_set_profile(struct snd_kcontrol *kcontrol,
 	if (tfa_exception != TFA98XX_NO_EXCEPTION) {
 		pr_info("%s: [Exception] restore ignored stream\n", __func__);
 
-		// restore streams at tfa_exception (case to switch profile)
+		// restore streams at ram_exception (case #2)
 		tfa98xx->pstream |= tfa98xx->ignored_pstream;
 		tfa98xx->cstream |= tfa98xx->ignored_cstream;
 
@@ -2224,6 +2199,7 @@ static int tfa98xx_set_saam_ctl(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 #endif
 	struct tfa98xx *tfa98xx = snd_soc_codec_get_drvdata(codec);
+
 	int saam_select = ucontrol->value.integer.value[0];
 
 	dev_dbg(&tfa98xx->i2c->dev, "%s: state: %d\n", __func__, saam_select);
@@ -2233,33 +2209,9 @@ static int tfa98xx_set_saam_ctl(struct snd_kcontrol *kcontrol,
 	// saam_select = 0: mute = 1 to disable RaM / SaM
 	// saam_select = 1: mute = 0 to enable RaM / SaM
 	// saam_select = 2: mute = 0 to enable RaM / SaM and playback, concurrently
-
-	_tfa_set_saam_select(saam_select);
-
-#if defined(TFA_EXCEPTION_AT_TRANSITION)
-	if (!saam_select) {
-		pr_info("%s: [Exception] restore ignored stream\n", __func__);
-
-		// restore streams at tfa_exception (case to switch profile)
-		tfa98xx->pstream |= tfa98xx->ignored_pstream;
-		tfa98xx->cstream |= tfa98xx->ignored_cstream;
-
-		pr_info("restore: [pstream %d, cstream %d, samstream %d]\n",
-			tfa98xx->pstream, tfa98xx->cstream, tfa98xx->samstream);
-		tfa98xx_set_stream_state((tfa98xx->pstream & BIT_PSTREAM)
-			|((tfa98xx->cstream<<1) & BIT_CSTREAM)
-			|((tfa98xx->samstream<<2) & BIT_SAMSTREAM));
-	}
-#endif
+    _tfa_set_saam_select(saam_select);
 
 	_tfa98xx_mute(tfa98xx, saam_select ? 0 : 1, SNDRV_PCM_STREAM_SAAM);
-
-#if defined(TFA_EXCEPTION_AT_TRANSITION)
-	if (!saam_select && tfa98xx->pstream != 0) {
-		pr_info("%s: [Exception] restore after stopping RaM\n", __func__);
-		_tfa98xx_mute(tfa98xx, 0, SNDRV_PCM_STREAM_SAAM);
-	}
-#endif
 
 	return 0;
 }
@@ -2288,47 +2240,6 @@ static void _tfa_set_saam_select(int saam_select)
 	tfa98xx_set_saam_use_case(saam_select);
 }
 
-#if defined(CONFIG_SND_SOC_SMA6101)
-static int tfa9872_status_control_put(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
-{
-	int ret = 0;
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct tfa98xx *tfa98xx = snd_soc_codec_get_drvdata(codec);
-
-	tfa98xx->status = (int)ucontrol->value.integer.value[0];
-
-	pr_info("%s : value %d\n",__func__,tfa98xx->status);
-
-	if(tfa98xx->status == TFA9872_STATUS_INACTIVE){
-		no_start = 1;
-	} else if(tfa98xx->status == TFA9872_STATUS_ACTIVE) {
-		no_start = 0;
-	}
-	return ret;
-}
-
-static int tfa9872_status_control_get(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
-{
-	int ret = 0;
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct tfa98xx *tfa98xx = snd_soc_codec_get_drvdata(codec);
-
-	pr_info("%s : value %d\n",__func__,tfa98xx->status);
-
-	ucontrol->value.integer.value[0] = tfa98xx->status;
-
-	return ret;
-}
-
-static struct snd_kcontrol_new tfa98xx_status_snd_controls[] = {
-	SOC_SINGLE_EXT("TFA9872 Status Control", SND_SOC_NOPM, 0, 1, 0,
-		tfa9872_status_control_get,
-		tfa9872_status_control_put),
-};
-#endif
-
 static int tfa98xx_create_controls(struct tfa98xx *tfa98xx)
 {
 	int prof, nprof, mix_index = 0;
@@ -2341,14 +2252,6 @@ static int tfa98xx_create_controls(struct tfa98xx *tfa98xx)
 	 * - one volume control for each profile hosting a vstep
 	 * - Stop control on TFA1 devices
 	 */
-#if defined(CONFIG_SND_SOC_SMA6101)
-	int ret = 0;
-	ret = snd_soc_add_codec_controls(tfa98xx->codec, tfa98xx_status_snd_controls,ARRAY_SIZE(tfa98xx_status_snd_controls));
-	if (ret < 0) {
-		pr_err("%s : add tfa98xx_status_snd_controls failed %d\n", __func__,ret);
-		return ret;
-	}
-#endif
 
 	nr_controls = 1; 	 /* Profile control */
 	if (tfa98xx_dev_family(tfa98xx->handle) == 1)
@@ -3321,8 +3224,8 @@ static void tfa98xx_monitor(struct work_struct *work)
 	}
 
 tfa_monitor_exit:
-	pr_info("%s: exit\n", __func__);
 	/* reschedule */
+	pr_info("%s: tfa_monitor_exit. \n", __func__);
 	// queue_delayed_work(tfa98xx->tfa98xx_wq, &tfa98xx->monitor_work, 5*HZ);
 }
 
@@ -4044,25 +3947,21 @@ static int tfa98xx_probe(struct snd_soc_codec *codec)
 #endif
 
 #ifdef CONFIG_SND_LGE_TX_NXP_LIB
-	// 0x34 : speaker, 0x35 : receiver,
-	// RaM is working on reciever, so don't need to register extcon devices twice.
-	if (tfa98xx->i2c->addr == 0x34) {
-		edev = devm_extcon_dev_allocate(codec->dev, tfa98xx_cable);
-		if (IS_ERR(edev)) {
-			dev_err(codec->dev, "failed to allocate extcon device\n");
-			return -ENOMEM;
-		}
-
-		strcpy(tfa98xx->edev_name,"ram_status");
-		edev->name = tfa98xx->edev_name;
-		ret = devm_extcon_dev_register(codec->dev, edev);
-		if (ret < 0) {
-			dev_err(codec->dev, "extcon_dev_register() failed: %d\n",
-				ret);
-			return ret;
-		}
-		pr_info("%s register excon device on i2c addr 0x%x\n", __func__, tfa98xx->i2c->addr);
+	edev = devm_extcon_dev_allocate(codec->dev, tfa98xx_cable);
+	if (IS_ERR(edev)) {
+		dev_err(codec->dev, "failed to allocate extcon device\n");
+		return -ENOMEM;
 	}
+
+	strcpy(tfa98xx->edev_name,"ram_status");
+	edev->name = tfa98xx->edev_name;
+	ret = devm_extcon_dev_register(codec->dev, edev);
+	if (ret < 0) {
+		dev_err(codec->dev, "extcon_dev_register() failed: %d\n",
+			ret);
+		return ret;
+	}
+	pr_info("%s register excon device\n",__func__);
 #endif
 	dev_info(codec->dev, "tfa98xx codec registered (%s)",
 							tfa98xx->fw.name);
@@ -4350,10 +4249,6 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c,
 	tfa98xx->dsp_init = TFA98XX_DSP_INIT_STOPPED;
 	tfa98xx->rate = 48000; /* init to the default sample rate (48kHz) */
 	tfa98xx->handle = -1;
-#if defined(CONFIG_SND_SOC_SMA6101)
-	tfa98xx->status = TFA9872_STATUS_INACTIVE;
-#endif
-
 
 	tfa98xx->regmap = devm_regmap_init_i2c(i2c, &tfa98xx_regmap);
 	if (IS_ERR(tfa98xx->regmap)) {
